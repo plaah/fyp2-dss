@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+*.pkl
+*.joblib
+
+# Data (never commit raw/sensitive data)
+data/*.csv
+data/*.json
+notebooks/.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.DS_Store
+
+# Flask
+instance/
+.webassets-cache
+
+# PostgreSQL
+*.sql.bak

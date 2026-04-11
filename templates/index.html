@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSS Casemix — Prediksi Grouping ICD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ═══ SIDEBAR ═══════════════════════════════════════════════════════ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <div class="sidebar-logo-icon">🏥</div>
+        <div>
+          <div class="sidebar-title">DSS Casemix</div>
+        </div>
+      </div>
+      <div class="sidebar-subtitle">AI Decision Support System</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-label">Menu</div>
+      <a href="/" class="nav-item active">
+        <span class="icon">🔮</span> Prediksi
+      </a>
+      <a href="/dashboard" class="nav-item">
+        <span class="icon">📊</span> Dashboard
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="status-indicator">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Memeriksa status…</span>
+      </div>
+      <button class="neurovi-btn" disabled title="Menunggu integrasi Neurovi">
+        🏥 Connect Neurovi
+      </button>
+      <div class="powered-by">Powered by XGBoost · SHAP</div>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN CONTENT ══════════════════════════════════════════════════ -->
+  <main class="main">
+    <div class="page-header">
+      <h1 class="page-title">Prediksi Grouping ICD</h1>
+      <p class="page-subtitle">Masukkan data klaim BPJS untuk mendapatkan prediksi outcome grouping dan analisis risiko finansial.</p>
+    </div>
+
+    <!-- Error Alert -->
+    <div id="error-alert" class="alert"></div>
+
+    <!-- ── Section 1: Input Form ──────────────────────────────────────── -->
+    <div class="card">
+      <div class="card-title">Input Klaim BPJS</div>
+
+      <div class="form-grid">
+        <!-- Row 1: ICD-10 codes -->
+        <div class="form-group">
+          <label for="idrg_primary_icd10">Primary ICD-10 (iDRG) <span class="required">*</span></label>
+          <input type="text" id="idrg_primary_icd10" placeholder="cth. I10, J18.0, E11.9"
+                 autocomplete="off" autocapitalize="characters">
+        </div>
+        <div class="form-group">
+          <label for="inacbg_primary_icd10">Primary ICD-10 (INACBG)</label>
+          <input type="text" id="inacbg_primary_icd10" placeholder="cth. I10 (sama dengan iDRG)"
+                 autocomplete="off" autocapitalize="characters">
+        </div>
+
+        <!-- Row 2: Procedure + Care Type -->
+        <div class="form-group">
+          <label for="idrg_icd9_procedure">ICD-9 Prosedur (opsional)</label>
+          <input type="text" id="idrg_icd9_procedure" placeholder="cth. 89.09, 93.89">
+        </div>
+        <div class="form-group">
+          <label for="care_type">Jenis Pelayanan</label>
+          <select id="care_type">
+            <option value="outp">Rawat Jalan (Outp)</option>
+            <option value="inp">Rawat Inap (Inp)</option>
+            <option value="emd">IGD (Emergency)</option>
+            <option value="gp">Poli Umum (GP)</option>
+          </select>
+        </div>
+
+        <!-- Row 3: Entry + Kelas -->
+        <div class="form-group">
+          <label for="entry_type">Tipe Masuk</label>
+          <select id="entry_type">
+            <option value="gp">Poli Umum (GP)</option>
+            <option value="outp">Rawat Jalan</option>
+            <option value="inp">Rawat Inap</option>
+            <option value="emd">IGD</option>
+            <option value="other">Lainnya</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="kelas">Kelas Perawatan</label>
+          <select id="kelas">
+            <option value="kelas_3" selected>Kelas 3 (Tarif Dasar × 1.00)</option>
+            <option value="kelas_2">Kelas 2 (Tarif Dasar × 1.25)</option>
+            <option value="kelas_1">Kelas 1 (Tarif Dasar × 1.50)</option>
+          </select>
+        </div>
+
+        <!-- Row 4: Tariffs -->
+        <div class="form-group">
+          <label for="base_tariff">Tarif Dasar INA-CBGs (IDR)</label>
+          <input type="number" id="base_tariff" placeholder="cth. 196100" min="0">
+        </div>
+        <div class="form-group">
+          <label for="actual_tariff">Tarif Aktual Diajukan (IDR)</label>
+          <input type="number" id="actual_tariff" placeholder="cth. 210000" min="0">
+        </div>
+
+        <!-- Row 5: Episodes + Stage -->
+        <div class="form-group">
+          <label for="episodes">Jumlah Episode</label>
+          <input type="number" id="episodes" value="1" min="1" max="999">
+        </div>
+        <div class="form-group">
+          <label for="claim_stage">Tahap Klaim</label>
+          <select id="claim_stage">
+            <option value="final-claim" selected>Final Claim</option>
+            <option value="idrg">iDRG</option>
+            <option value="inacbg">INACBG</option>
+            <option value="claim-sent">Claim Sent</option>
+          </select>
+        </div>
+      </div><!-- /form-grid -->
+
+      <button class="btn btn-primary" id="submit-btn" type="button">
+        🔍 Analisis Klaim
+      </button>
+      <p class="btn-hint">Hasil akan muncul dalam &lt; 1 detik</p>
+    </div><!-- /input card -->
+
+    <!-- ── Section 2: Result ───────────────────────────────────────────── -->
+    <div id="result-section">
+
+      <div class="card">
+        <div class="card-title">Hasil Prediksi ML</div>
+
+        <!-- Outcome badge (big, colored) -->
+        <div id="outcome-badge"></div>
+
+        <!-- Confidence bar -->
+        <div class="confidence-bar-wrap">
+          <div class="confidence-label">Distribusi Confidence</div>
+          <div class="confidence-bar">
+            <div class="conf-seg valid"      id="seg-valid"      style="width:0%"></div>
+            <div class="conf-seg incomplete" id="seg-incomplete" style="width:0%"></div>
+            <div class="conf-seg invalid"    id="seg-invalid"    style="width:0%"></div>
+          </div>
+          <div class="confidence-labels">
+            <span class="conf-item-label" id="conf-valid-label">Valid 0%</span>
+            <span class="conf-item-label" id="conf-incomplete-label">Incomplete 0%</span>
+            <span class="conf-item-label" id="conf-invalid-label">Invalid 0%</span>
+          </div>
+        </div>
+      </div><!-- /result card -->
+
+      <!-- Financial metrics row -->
+      <div class="metrics-row">
+        <div class="metric-card">
+          <div class="metric-label">Tarif Reimbursement BPJS</div>
+          <div class="metric-value idr" id="metric-base-tariff">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Financial Gap</div>
+          <div class="metric-value idr" id="metric-gap">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Prob. Reimbursement</div>
+          <div class="metric-value" id="metric-prob">—</div>
+        </div>
+      </div>
+
+      <!-- SHAP explanation chart -->
+      <div class="card chart-card">
+        <div class="card-title">Faktor Penentu Prediksi (SHAP)</div>
+        <div class="chart-wrap">
+          <canvas id="shap-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Recommendation box -->
+      <div id="rec-box" class="recommendation-box"></div>
+
+    </div><!-- /result-section -->
+
+    <!-- ── Section 3: Recent Predictions Table ───────────────────────── -->
+    <div class="card">
+      <div class="flex-between mb-0">
+        <div class="card-title mb-0">Riwayat Prediksi Hari Ini</div>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead>
+            <tr>
+              <th>Waktu</th>
+              <th>ICD-10</th>
+              <th>Prediksi</th>
+              <th>Risk</th>
+              <th>Gap IDR</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="recent-tbody">
+            <tr><td colspan="6" class="text-muted" style="text-align:center;padding:20px">
+              Memuat data…
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+      <a href="/dashboard" class="table-link">Lihat semua prediksi di Dashboard →</a>
+    </div>
+
+  </main><!-- /main -->
+</div><!-- /layout -->
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

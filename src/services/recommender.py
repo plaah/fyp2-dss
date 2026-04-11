@@ -115,13 +115,6 @@ class RecommendationEngine:
         """
         grouping_outcome = prediction_result.get("prediction", "grouping_valid")
         risk_level       = financial_result.get("risk_level", "LOW")
-        confidence       = prediction_result.get("confidence", {})
-        pred_confidence  = confidence.get(grouping_outcome, 0.0)
-
-        # Top SHAP feature name (may be None if explanation unavailable)
-        top_feature: Optional[str] = None
-        if explanation and isinstance(explanation, list) and "feature" in explanation[0]:
-            top_feature = explanation[0].get("feature")
 
         primary_action = PRIMARY_ACTION_MAP.get(
             (grouping_outcome, risk_level),
@@ -164,7 +157,7 @@ class RecommendationEngine:
         self,
         prediction: Dict[str, Any],
         financial: Dict[str, Any],
-        explanation: List[Dict[str, Any]],
+        explanation: List[Dict[str, Any]],  # noqa: ARG002 — reserved for future SHAP-driven tips
     ) -> List[Dict[str, Any]]:
         """
         Build ranked recommendations when grouping_valid is predicted.
@@ -172,17 +165,16 @@ class RecommendationEngine:
         Args:
             prediction:  prediction_result dict.
             financial:   financial_result dict.
-            explanation: SHAP feature list.
+            explanation: SHAP feature list (reserved for future per-feature tips).
 
         Returns:
             list of recommendation dicts ranked by priority.
         """
-        risk_level        = financial.get("risk_level", "LOW")
-        reimbursement     = financial.get("reimbursement_amount", 0)
-        gap               = financial.get("financial_gap", 0)
-        pred_confidence   = prediction.get("confidence", {}).get("grouping_valid", 0)
-        cbg_code          = financial.get("cbg_code", "")
-        cbg_desc          = financial.get("cbg_description", "")
+        risk_level      = financial.get("risk_level", "LOW")
+        reimbursement   = financial.get("reimbursement_amount", 0)
+        gap             = financial.get("financial_gap", 0)
+        pred_confidence = prediction.get("confidence", {}).get("grouping_valid", 0)
+        cbg_code        = financial.get("cbg_code", "")
 
         recs = []
 

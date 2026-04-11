@@ -166,6 +166,15 @@ Final result: grouping_valid / coding_incomplete / grouping_invalid
 | T3.3 Thesis Ch.5 Draft | SCRUM-28 | ✅ Done |
 | T3.4 Sprint 3 Housekeeping + Git | SCRUM-29 | ✅ Done |
 
+### Sprint 4 (Apr 28–May 4)
+
+| Task | Jira | Status |
+|---|---|---|
+| T4.1 Frontend Dashboard v1 (2 pages) | SCRUM-29 | ✅ Done |
+| T4.2 PostgreSQL Integration + /stats | SCRUM-30 | ✅ Done |
+| T4.3 Thesis Ch.4 Draft (DB + UI Design) | SCRUM-31 | ✅ Done |
+| T4.4 Sprint 4 Housekeeping + Git | SCRUM-32 | ✅ Done |
+
 ---
 
 ## API Endpoints
@@ -177,7 +186,42 @@ Final result: grouping_valid / coding_incomplete / grouping_invalid
 | `/api/v1/financial-impact` | POST | S3 | ✅ Live |
 | `/api/v1/recommend` | POST | S3 | ✅ Live |
 | `/api/v1/full-assessment` | POST | S3 | ✅ Live |
+| `/api/v1/stats` | GET | S4 | ✅ Live |
 | `/api/v1/feedback` | POST | S5 | ⏳ Planned |
+
+---
+
+## Dashboard
+
+| Page | Route | Description |
+|---|---|---|
+| Prediction Tool | `/` | ICD-10 input form → ML prediction + SHAP + financial risk + recommendations |
+| Analytics Overview | `/dashboard` | KPI cards + donut/line/risk charts + paginated predictions table + CSV export |
+
+Shared: sidebar navigation, status indicator, Neurovi hook (disabled, pending API docs).
+
+---
+
+## Database Schema
+
+| Table | Purpose | Key Columns |
+|---|---|---|
+| `predictions` | Audit trail of every /full-assessment call | ml_prediction, risk_level, financial_gap, top_shap_feature, source |
+| `icd_reference` | ICD-10 2010 + ICD-9-CM code catalogue | code, description, category, mdc_group |
+| `system_stats` | Pre-aggregated daily metrics for dashboard | stat_date, total_predictions, avg_reimbursement_probability |
+
+DB: PostgreSQL `fyp2_db` @ localhost:5432 (user: aflakhamjad)
+
+---
+
+## Neurovi Integration
+
+Status: **Prepared, not yet active** — awaiting Neurovi API documentation from Tamtech.
+
+Hooks in place:
+- `fetchFromNeurovi(encounterId)` stub in `static/js/app.js`
+- `source` field in `predictions` table accepts `'neurovi'` value
+- "Connect Neurovi" button in sidebar (disabled, grayed out)
 
 ---
 

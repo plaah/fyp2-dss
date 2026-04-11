@@ -9,6 +9,22 @@ api_bp = Blueprint('api', __name__)
 _financial_estimator = FinancialEstimator()
 
 
+def _save_prediction_async(payload: dict) -> None:
+    """
+    Persist a prediction result to the database in a non-blocking manner.
+    If the DB write fails for any reason the API response is not affected.
+
+    Args:
+        payload: Combined dict with 'prediction', 'financial', 'recommendation',
+                 and 'request_body' keys.
+    """
+    try:
+        from src.models.crud import save_prediction
+        save_prediction(payload)
+    except Exception:
+        pass  # DB failure must never block the API response
+
+
 @api_bp.route('/health', methods=['GET'])
 def health():
     try:
@@ -206,13 +222,43 @@ def full_assessment():
 
     elapsed_ms = round((time.time() - t_start) * 1000)
 
-    return jsonify({
-        "prediction":        prediction_payload,
-        "financial":         financial_result,
-        "recommendation":    recommendation,
+    response_payload = {
+        "prediction":         prediction_payload,
+        "financial":          financial_result,
+        "recommendation":     recommendation,
         "processing_time_ms": elapsed_ms,
-        "status":            "success",
-    }), 200
+        "status":             "success",
+    }
+
+    # Persist to DB non-blocking — failure must not affect response
+    _save_prediction_async({
+        "prediction":    prediction_payload,
+        "financial":     financial_result,
+        "recommendation": recommendation,
+        "request_body":  body,
+        "source":        body.get("source", "manual"),
+    })
+
+    return jsonify(response_payload), 200
+
+
+@api_bp.route('/stats', methods=['GET'])
+def stats():
+    """
+    GET /api/v1/stats
+
+    Return aggregated statistics from the predictions table for the
+    analytics dashboard.  Includes label distribution, financial risk summary,
+    and the last 5 predictions for the recent-predictions widget.
+    """
+    try:
+        from src.models.crud import get_stats_summary, get_prediction_history
+        summary = get_stats_summary()
+        summary["prediction_history"] = get_prediction_history(days=7)
+        summary["status"] = "success"
+        return jsonify(summary), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @api_bp.route('/feedback', methods=['POST'])

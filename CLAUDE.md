@@ -157,16 +157,27 @@ Final result: grouping_valid / coding_incomplete / grouping_invalid
 | T2.3 SHAP explainability module | SCRUM-24 | ✅ Done |
 | T2.4 Git commit + Sprint 2 summary | SCRUM-25 | ✅ Done |
 
+### Sprint 3 (Apr 21–27)
+
+| Task | Jira | Status |
+|---|---|---|
+| T3.1 Financial Impact Estimator | SCRUM-26 | ✅ Done |
+| T3.2 Recommendation Synthesis Module | SCRUM-27 | ✅ Done |
+| T3.3 Thesis Ch.5 Draft | SCRUM-28 | ✅ Done |
+| T3.4 Sprint 3 Housekeeping + Git | SCRUM-29 | ✅ Done |
+
 ---
 
-## Flask API Endpoints (planned)
+## API Endpoints
 
 | Endpoint | Method | Sprint | Status |
 |---|---|---|---|
-| `/api/v1/health` | GET | S1 | Stub ready |
-| `/api/v1/predict` | POST | S2 | Stub ready |
-| `/api/v1/financial-impact` | POST | S3 | Planned |
-| `/api/v1/feedback` | POST | S5 | Planned |
+| `/api/v1/health` | GET | S1 | ✅ Live |
+| `/api/v1/predict` | POST | S2 | ✅ Live |
+| `/api/v1/financial-impact` | POST | S3 | ✅ Live |
+| `/api/v1/recommend` | POST | S3 | ✅ Live |
+| `/api/v1/full-assessment` | POST | S3 | ✅ Live |
+| `/api/v1/feedback` | POST | S5 | ⏳ Planned |
 
 ---
 

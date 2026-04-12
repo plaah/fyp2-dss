@@ -1,7 +1,9 @@
 """
-T2.2 — Predictor Service
-Loads best_model.pkl + preprocessing.pkl at startup.
-Provides preprocess_input() and predict() for the Flask API.
+Predictor Service — Legacy wrapper (Sprint 2)
+=============================================
+NOTE: The primary inference path is now SurrogateGrouper (src/services/surrogate_grouper.py).
+This module is retained for backward compatibility with any code that still
+calls predictor.predict() directly.  Routes.py uses SurrogateGrouper directly.
 """
 
 import os

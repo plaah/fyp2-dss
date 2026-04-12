@@ -790,3 +790,56 @@ tbody tr.row-invalid    { border-left: 3px solid var(--color-invalid); }
   .form-grid   { grid-template-columns: 1fr; }
   .metrics-row { grid-template-columns: 1fr; }
 }
+
+/* ── Surrogate Grouper result styles ─────────────────────── */
+.cbg-headline {
+  text-align: center;
+  padding: 24px 0 8px;
+}
+.cbg-code-large {
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+.cbg-desc-text {
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+.badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 16px;
+}
+.badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1.5px solid transparent;
+}
+.badge-mdc    { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.badge-sev    { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+.badge-exact  { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+.badge-approx { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.badge-none   { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.conf-sublabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.form-hint {
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}

@@ -1,0 +1,14 @@
+idrg_primary_icd10
+idrg_icd9_procedure
+inacbg_primary_icd10
+icd_block
+icd_chapter
+care_type_str
+entry_type
+kelas
+is_z_code
+is_r_code
+is_outpatient
+has_procedure
+icd_match
+episodes

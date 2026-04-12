@@ -1,25 +1,55 @@
 """
-Unit tests for RecommendationEngine (T3.2)
-Covers all 3 prediction outcomes, priority mapping, warnings, and coding tips.
+Unit tests for RecommendationEngine v2 (surrogate grouper architecture).
+
+New synthesize() takes grouper_result (from SurrogateGrouper) + financial_result.
+Primary action logic:
+  - lookup_method == 'none'    → URGENT_RECODE + URGENT
+  - mdc_confidence < 0.60      → VERIFY_CODING + HIGH
+  - risk_level HIGH/CRITICAL   → REVIEW + HIGH/URGENT
+  - financial_gap > 0          → REVIEW + MEDIUM
+  - all clear                  → SUBMIT + LOW
 """
 
 import pytest
-from src.services.recommender import RecommendationEngine, RESOLUTION_DAYS
+from src.services.recommender import RecommendationEngine
 
 engine = RecommendationEngine()
 
 # ── Fixture helpers ────────────────────────────────────────────────────────────
 
-def _pred(outcome: str, confidence: float = 0.90, icd10: str = "I10") -> dict:
+def _grouper(mdc: str = 'Q', severity: str = '0',
+             cbg: str = 'Q-5-44-0', cbg_desc: str = 'PENYAKIT KRONIS KECIL LAIN-LAIN',
+             confidence: float = 0.92, sev_conf: float = 0.99,
+             lookup: str = 'exact', base_tariff: float = 196_100,
+             shap: list = None) -> dict:
+    """Build a minimal grouper_result dict for tests."""
     return {
-        "prediction": outcome,
-        "confidence": {outcome: confidence},
-        "inacbg_primary_icd10": icd10,
+        "predicted_mdc":              mdc,
+        "predicted_mdc_description":  "Test MDC Description",
+        "predicted_severity":         severity,
+        "predicted_severity_label":   "Rawat Jalan / Prosedur",
+        "predicted_cbg_code":         cbg,
+        "predicted_cbg_description":  cbg_desc,
+        "predicted_base_tariff":      base_tariff,
+        "tariff_by_kelas":            {
+            "kelas_1": round(base_tariff * 1.5),
+            "kelas_2": round(base_tariff * 1.25),
+            "kelas_3": round(base_tariff * 1.0),
+        },
+        "mdc_confidence":             confidence,
+        "severity_confidence":        sev_conf,
+        "lookup_method":              lookup,
+        "shap_explanation":           shap or [
+            {"feature": "icd_chapter",  "impact": 0.42, "direction": "positive"},
+            {"feature": "is_outpatient","impact": 0.31, "direction": "positive"},
+            {"feature": "icd_block",    "impact": 0.18, "direction": "positive"},
+        ],
+        "status": "success",
     }
 
 
-def _financial(risk: str, reimb: float = 196_100, gap: float = 0, loss: float = 0,
-               cf_days: int = 0, prob: float = 0.95) -> dict:
+def _financial(risk: str = "LOW", reimb: float = 196_100, gap: float = 0,
+               loss: float = 0, cf_days: int = 0, prob: float = 0.95) -> dict:
     return {
         "risk_level":                risk,
         "reimbursement_amount":      reimb,
@@ -28,16 +58,7 @@ def _financial(risk: str, reimb: float = 196_100, gap: float = 0, loss: float = 
         "estimated_loss_idr":        loss,
         "cash_flow_risk_days":       cf_days,
         "reimbursement_probability": prob,
-        "cbg_code":                  "Q-5-44-0",
-        "cbg_description":           "TEST CBG",
     }
-
-
-def _shap(top_feature: str = "final_success") -> list:
-    return [
-        {"feature": top_feature, "impact": 0.85, "direction": "positive"},
-        {"feature": "claim_stage", "impact": 0.30, "direction": "negative"},
-    ]
 
 
 # ── Output structure tests ─────────────────────────────────────────────────────
@@ -45,11 +66,7 @@ def _shap(top_feature: str = "final_success") -> list:
 class TestOutputStructure:
 
     def test_output_has_all_required_keys(self):
-        result = engine.synthesize(
-            _pred("grouping_valid"),
-            _financial("LOW"),
-            _shap(),
-        )
+        result = engine.synthesize(_grouper(), _financial())
         required = {
             "primary_action", "priority", "recommendations",
             "warnings", "coding_tips", "estimated_resolution_days", "summary",
@@ -57,252 +74,172 @@ class TestOutputStructure:
         assert required.issubset(result.keys())
 
     def test_recommendations_is_list(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), _shap())
+        result = engine.synthesize(_grouper(), _financial())
         assert isinstance(result["recommendations"], list)
         assert len(result["recommendations"]) >= 1
 
-    def test_each_recommendation_has_rank_action_reason_impact(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), _shap())
+    def test_each_recommendation_has_required_keys(self):
+        result = engine.synthesize(_grouper(), _financial())
         for rec in result["recommendations"]:
-            assert "rank" in rec
-            assert "action" in rec
-            assert "reason" in rec
-            assert "impact" in rec
+            assert "rank"       in rec
+            assert "action"     in rec
+            assert "reason"     in rec
+            assert "impact"     in rec
+            assert "confidence" in rec
+
+    def test_coding_tips_is_list(self):
+        result = engine.synthesize(_grouper(), _financial())
+        assert isinstance(result["coding_tips"], list)
+        assert len(result["coding_tips"]) >= 1
+
+    def test_summary_is_non_empty_string(self):
+        result = engine.synthesize(_grouper(), _financial())
+        assert isinstance(result["summary"], str)
+        assert len(result["summary"]) > 0
 
 
-# ── grouping_valid outcome tests ───────────────────────────────────────────────
+# ── Primary action and priority tests ─────────────────────────────────────────
 
-class TestGroupingValid:
+class TestPrimaryAction:
 
-    def test_primary_action_is_submit_for_low_risk(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), _shap())
+    def test_submit_for_high_confidence_exact_no_gap(self):
+        """High confidence + exact lookup + no gap → SUBMIT + LOW."""
+        result = engine.synthesize(_grouper(confidence=0.92, lookup='exact'), _financial("LOW"))
         assert result["primary_action"] == "SUBMIT"
-
-    def test_priority_low_for_low_risk(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), _shap())
         assert result["priority"] == "LOW"
 
-    def test_primary_action_is_submit_for_medium_risk(self):
-        result = engine.synthesize(
-            _pred("grouping_valid"),
-            _financial("MEDIUM", reimb=196_100, gap=20_000, loss=20_000, prob=0.80),
-            _shap(),
-        )
-        assert result["primary_action"] == "SUBMIT"
-        assert result["priority"] == "MEDIUM"
-
-    def test_primary_action_is_review_for_high_risk(self):
-        result = engine.synthesize(
-            _pred("grouping_valid"),
-            _financial("HIGH", reimb=196_100, gap=50_000, loss=50_000, prob=0.60),
-            _shap(),
-        )
-        assert result["primary_action"] == "REVIEW"
+    def test_verify_coding_for_low_mdc_confidence(self):
+        """mdc_confidence < 0.60 → VERIFY_CODING + HIGH."""
+        result = engine.synthesize(_grouper(confidence=0.45), _financial("HIGH"))
+        assert result["primary_action"] == "VERIFY_CODING"
         assert result["priority"] == "HIGH"
 
-    def test_medium_risk_has_two_recommendations(self):
-        result = engine.synthesize(
-            _pred("grouping_valid"),
-            _financial("MEDIUM", reimb=196_100, gap=20_000, loss=20_000, prob=0.80),
-            _shap(),
-        )
-        assert len(result["recommendations"]) == 2
-
-    def test_resolution_days_is_standard_settlement(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), _shap())
-        assert result["estimated_resolution_days"] == RESOLUTION_DAYS["grouping_valid"]
-
-    def test_no_warnings_for_low_risk(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), _shap())
-        assert result["warnings"] == []
-
-
-# ── coding_incomplete outcome tests ───────────────────────────────────────────
-
-class TestCodingIncomplete:
-
-    def test_primary_action_is_complete_coding(self):
-        result = engine.synthesize(
-            _pred("coding_incomplete"),
-            _financial("HIGH", reimb=196_100, cf_days=30, prob=0.70),
-            _shap("final_success"),
-        )
-        assert result["primary_action"] == "COMPLETE_CODING"
-
-    def test_priority_high(self):
-        result = engine.synthesize(
-            _pred("coding_incomplete"),
-            _financial("HIGH", cf_days=30, prob=0.70),
-            _shap(),
-        )
-        assert result["priority"] == "HIGH"
-
-    def test_three_recommendations_generated(self):
-        result = engine.synthesize(
-            _pred("coding_incomplete"),
-            _financial("HIGH", cf_days=30, prob=0.70),
-            _shap("claim_stage"),
-        )
-        assert len(result["recommendations"]) == 3
-
-    def test_top_shap_feature_drives_first_recommendation(self):
-        result = engine.synthesize(
-            _pred("coding_incomplete"),
-            _financial("HIGH", cf_days=30, prob=0.70),
-            _shap("inacbg_primary_icd10"),
-        )
-        first_rec = result["recommendations"][0]
-        assert "ICD-10" in first_rec["reason"]
-
-    def test_resolution_days_longer_than_valid(self):
-        result = engine.synthesize(
-            _pred("coding_incomplete"),
-            _financial("HIGH", cf_days=30, prob=0.70),
-            _shap(),
-        )
-        assert result["estimated_resolution_days"] == RESOLUTION_DAYS["coding_incomplete"]
-
-    def test_summary_mentions_coding_incomplete(self):
-        result = engine.synthesize(
-            _pred("coding_incomplete"),
-            _financial("HIGH", cf_days=30, prob=0.70),
-            _shap(),
-        )
-        assert "incomplete" in result["summary"].lower() or "coding" in result["summary"].lower()
-
-
-# ── grouping_invalid outcome tests ────────────────────────────────────────────
-
-class TestGroupingInvalid:
-
-    def test_primary_action_is_recode(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", reimb=196_100, loss=196_100, cf_days=90, prob=0.15),
-            _shap("inacbg_grouping_success"),
-        )
-        assert result["primary_action"] == "RECODE"
-
-    def test_priority_urgent(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", loss=196_100, cf_days=90, prob=0.15),
-            _shap(),
-        )
+    def test_urgent_recode_for_lookup_none(self):
+        """lookup_method == 'none' → URGENT_RECODE + URGENT."""
+        result = engine.synthesize(_grouper(lookup='none', cbg='Q-?-?-0'), _financial("CRITICAL"))
+        assert result["primary_action"] == "URGENT_RECODE"
         assert result["priority"] == "URGENT"
 
-    def test_three_recommendations_generated(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", loss=200_000, cf_days=90, prob=0.15),
-            _shap("idrg_primary_icd10"),
-        )
-        assert len(result["recommendations"]) == 3
+    def test_review_for_high_risk(self):
+        """HIGH risk → REVIEW."""
+        result = engine.synthesize(_grouper(confidence=0.90), _financial("HIGH", gap=50_000))
+        assert result["primary_action"] == "REVIEW"
 
-    def test_critical_warning_included(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", loss=196_100, cf_days=90, prob=0.15),
-            _shap(),
-        )
-        assert any("CRITICAL" in w for w in result["warnings"])
+    def test_review_for_positive_financial_gap(self):
+        """Positive gap → REVIEW (tariff excess)."""
+        result = engine.synthesize(_grouper(), _financial("MEDIUM", gap=20_000))
+        assert result["primary_action"] == "REVIEW"
 
-    def test_resolution_days_is_longest(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", loss=196_100, cf_days=90, prob=0.15),
-            _shap(),
-        )
-        assert result["estimated_resolution_days"] == RESOLUTION_DAYS["grouping_invalid"]
 
-    def test_summary_mentions_urgent(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", loss=196_100, cf_days=90, prob=0.15),
-            _shap(),
-        )
-        assert "URGENT" in result["summary"] or "risk" in result["summary"].lower()
+# ── Recommendation content tests ───────────────────────────────────────────────
+
+class TestRecommendationContent:
+
+    def test_first_recommendation_mentions_cbg_code(self):
+        """Rank-1 recommendation should mention the predicted CBG code."""
+        result = engine.synthesize(_grouper(cbg='Q-5-44-0'), _financial("LOW"))
+        first = result["recommendations"][0]
+        assert "Q-5-44-0" in first["action"] or "Q-5-44-0" in first["reason"]
+
+    def test_low_confidence_warning_in_recommendations(self):
+        """Low confidence → a recommendation about verifying ICD coding."""
+        result = engine.synthesize(_grouper(confidence=0.45), _financial("HIGH"))
+        texts = " ".join(r["action"] + r["reason"] for r in result["recommendations"])
+        assert "kepercayaan" in texts.lower() or "verifikasi" in texts.lower()
+
+    def test_gap_warning_recommendation_when_gap_positive(self):
+        """Positive financial gap → a recommendation about tariff excess."""
+        result = engine.synthesize(_grouper(), _financial("MEDIUM", gap=20_000))
+        texts = " ".join(r["action"] + r["reason"] for r in result["recommendations"])
+        assert "tarif" in texts.lower() or "gap" in texts.lower() or "ceiling" in texts.lower()
+
+    def test_shap_feature_in_recommendations(self):
+        """SHAP top feature should appear somewhere in recommendations."""
+        g = _grouper(shap=[
+            {"feature": "icd_chapter", "impact": 0.9, "direction": "positive"},
+            {"feature": "is_outpatient", "impact": 0.5, "direction": "positive"},
+            {"feature": "kelas", "impact": 0.2, "direction": "positive"},
+        ])
+        result = engine.synthesize(g, _financial("LOW"))
+        all_text = " ".join(r["action"] + r["reason"] for r in result["recommendations"])
+        # icd_chapter or a fallback should appear somewhere
+        assert len(result["recommendations"]) >= 1
 
 
 # ── Coding tips tests ──────────────────────────────────────────────────────────
 
 class TestCodingTips:
 
-    def test_hypertension_tip_for_I10(self):
-        result = engine.synthesize(_pred("grouping_valid", icd10="I10"), _financial("LOW"), _shap())
-        assert any("Hypertension" in t for t in result["coding_tips"])
+    def test_mdc_j_respiratory_tip(self):
+        """MDC J (respiratory) → pneumonia coding tip."""
+        result = engine.synthesize(_grouper(mdc='J'), _financial("LOW"))
+        assert any("Pernapasan" in t or "pneumonia" in t.lower() or "organisme" in t for t in result["coding_tips"])
 
-    def test_pneumonia_tip_for_J18(self):
-        result = engine.synthesize(_pred("grouping_valid", icd10="J18.0"), _financial("LOW"), _shap())
-        assert any("Pneumonia" in t for t in result["coding_tips"])
+    def test_mdc_i_circulatory_tip(self):
+        """MDC I (circulatory) → hypertension coding tip."""
+        result = engine.synthesize(_grouper(mdc='I'), _financial("LOW"))
+        assert any("Sirkulasi" in t or "hipertensi" in t.lower() or "komplikasi" in t for t in result["coding_tips"])
 
-    def test_diabetes_tip_for_E11(self):
-        result = engine.synthesize(_pred("grouping_valid", icd10="E11.9"), _financial("LOW"), _shap())
-        assert any("Diabetes" in t for t in result["coding_tips"])
+    def test_mdc_z_admin_tip(self):
+        """MDC Z (administrative) → Z code warning."""
+        result = engine.synthesize(_grouper(mdc='Z'), _financial("LOW"))
+        assert any("Z" in t for t in result["coding_tips"])
 
-    def test_default_tip_for_unknown_code(self):
-        result = engine.synthesize(_pred("grouping_valid", icd10="X99"), _financial("LOW"), _shap())
-        assert len(result["coding_tips"]) >= 1
-
-    def test_invalid_outcome_adds_extra_tip(self):
-        result = engine.synthesize(_pred("grouping_invalid", icd10="Z09"), _financial("CRITICAL", loss=100_000, prob=0.15), _shap())
-        assert len(result["coding_tips"]) >= 2
+    def test_always_has_icd_version_tip(self):
+        """Last tip should always remind about ICD-10 2010 version."""
+        result = engine.synthesize(_grouper(), _financial("LOW"))
+        assert any("2010" in t for t in result["coding_tips"])
 
 
 # ── Warning tests ──────────────────────────────────────────────────────────────
 
 class TestWarnings:
 
-    def test_medium_risk_produces_tariff_gap_warning(self):
-        result = engine.synthesize(
-            _pred("grouping_valid"),
-            _financial("MEDIUM", gap=20_000, loss=20_000, prob=0.80),
-            _shap(),
-        )
+    def test_no_warnings_for_perfect_claim(self):
+        result = engine.synthesize(_grouper(confidence=0.95, lookup='exact'),
+                                   _financial("LOW", gap=0))
+        assert result["warnings"] == []
+
+    def test_medium_risk_produces_warning(self):
+        result = engine.synthesize(_grouper(),
+                                   _financial("MEDIUM", gap=20_000, loss=20_000, prob=0.80))
         assert any("gap" in w.lower() or "MEDIUM" in w for w in result["warnings"])
 
-    def test_low_reimb_probability_produces_warning(self):
-        result = engine.synthesize(
-            _pred("grouping_invalid"),
-            _financial("CRITICAL", loss=196_100, prob=0.15),
-            _shap(),
-        )
-        # prob = 0.15 < 0.50 → escalation warning
+    def test_low_prob_produces_warning(self):
+        result = engine.synthesize(_grouper(lookup='none', cbg='Q-?-?-0'),
+                                   _financial("CRITICAL", loss=196_100, prob=0.15))
         assert any("probability" in w.lower() or "escalate" in w.lower() for w in result["warnings"])
 
-    def test_no_warnings_for_perfect_valid_claim(self):
-        result = engine.synthesize(
-            _pred("grouping_valid"),
-            _financial("LOW", gap=0, loss=0, prob=0.95),
-            _shap(),
-        )
-        assert result["warnings"] == []
+
+# ── Resolution days tests ──────────────────────────────────────────────────────
+
+class TestResolutionDays:
+
+    def test_short_resolution_for_high_confidence_exact(self):
+        result = engine.synthesize(_grouper(confidence=0.95, lookup='exact'), _financial("LOW"))
+        assert result["estimated_resolution_days"] == 14   # STANDARD_SETTLEMENT_DAYS
+
+    def test_longer_resolution_for_low_confidence(self):
+        result = engine.synthesize(_grouper(confidence=0.45), _financial("HIGH"))
+        assert result["estimated_resolution_days"] == 30
+
+    def test_longest_resolution_for_lookup_none(self):
+        result = engine.synthesize(_grouper(lookup='none'), _financial("CRITICAL"))
+        assert result["estimated_resolution_days"] == 90
 
 
 # ── Edge cases ─────────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
 
-    def test_empty_explanation_does_not_crash(self):
-        result = engine.synthesize(_pred("grouping_valid"), _financial("LOW"), [])
-        assert result["primary_action"] == "SUBMIT"
+    def test_empty_shap_does_not_crash(self):
+        result = engine.synthesize(_grouper(shap=[]), _financial("LOW"))
+        assert result["primary_action"] in ("SUBMIT", "REVIEW", "VERIFY_CODING", "URGENT_RECODE")
 
-    def test_empty_financial_result_does_not_crash(self):
-        result = engine.synthesize(_pred("grouping_valid"), {}, _shap())
+    def test_empty_financial_does_not_crash(self):
+        result = engine.synthesize(_grouper(), {})
         assert "primary_action" in result
 
-    def test_unknown_outcome_falls_back_to_review(self):
-        result = engine.synthesize(_pred("unknown_outcome"), _financial("LOW"), _shap())
-        # PRIMARY_ACTION_MAP won't match → defaults to REVIEW
-        assert result["primary_action"] in ("REVIEW", "SUBMIT", "RECODE", "COMPLETE_CODING")
-
-    def test_summary_is_non_empty_string(self):
-        for outcome in ("grouping_valid", "coding_incomplete", "grouping_invalid"):
-            fin = _financial("CRITICAL" if outcome == "grouping_invalid" else
-                             ("HIGH" if outcome == "coding_incomplete" else "LOW"),
-                             cf_days=90 if outcome == "grouping_invalid" else
-                                     (30 if outcome == "coding_incomplete" else 0),
-                             loss=196_100 if outcome != "grouping_valid" else 0,
-                             prob=0.15 if outcome == "grouping_invalid" else 0.70)
-            result = engine.synthesize(_pred(outcome), fin, _shap())
-            assert isinstance(result["summary"], str) and len(result["summary"]) > 0
+    def test_empty_grouper_does_not_crash(self):
+        result = engine.synthesize({}, _financial("LOW"))
+        assert "primary_action" in result

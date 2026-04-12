@@ -139,43 +139,36 @@ async function checkApiStatus() {
  * Read form values, POST to /api/v1/full-assessment, render results.
  */
 async function submitPrediction() {
-  const btn    = document.getElementById('submit-btn');
-  const alert  = document.getElementById('error-alert');
+  const btn   = document.getElementById('submit-btn');
+  const alert = document.getElementById('error-alert');
 
   if (alert) { alert.className = 'alert'; alert.textContent = ''; }
 
-  // Collect form fields
+  // Clinical-only payload — no grouping result fields needed
+  const primaryIcd = _val('primary_icd10').toUpperCase();
+  const inacbgIcd  = (_val('inacbg_icd10') || primaryIcd).toUpperCase();
+
   const body = {
-    idrg_primary_icd10:    _val('idrg_primary_icd10').toUpperCase(),
-    inacbg_primary_icd10:  _val('inacbg_primary_icd10').toUpperCase(),
-    idrg_icd9_procedure:   _val('idrg_icd9_procedure'),
-    care_type:             _val('care_type'),
-    entry_type:            _val('entry_type'),
-    kelas:                 _val('kelas'),
-    base_tariff:           parseFloat(_val('base_tariff'))   || 0,
-    actual_tariff:         parseFloat(_val('actual_tariff')) || 0,
-    episodes:              parseInt(_val('episodes'))        || 1,
-    claim_stage:           _val('claim_stage'),
-    // Hidden / auto-derived fields
-    gender:                'male',
-    idrg_icd10_valid:      1,
-    inacbg_icd10_validity: 1,
-    idrg_grouping_success: true,
-    inacbg_grouping_success: true,
-    mdc_number:            '15',
-    tariff_class:          '3',
+    primary_icd10:  primaryIcd,
+    inacbg_icd10:   inacbgIcd,
+    icd9_procedure: _val('icd9_procedure') || null,
+    care_type:      _val('care_type'),
+    entry_type:     _val('entry_type'),
+    kelas:          _val('kelas'),
+    episodes:       parseInt(_val('episodes')) || 1,
+    actual_tariff:  parseFloat(_val('actual_tariff')) || 0,
   };
 
   // Validate required
-  if (!body.idrg_primary_icd10) {
-    _showAlert(alert, 'Primary ICD-10 (iDRG) wajib diisi.');
+  if (!body.primary_icd10) {
+    _showAlert(alert, 'Diagnosis Utama ICD-10 wajib diisi.');
     return;
   }
 
   // Loading state
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Menganalisis…';
+    btn.innerHTML = '<span class="spinner"></span> Memprediksi…';
   }
 
   try {
@@ -194,86 +187,110 @@ async function submitPrediction() {
     _loadRecentPredictions();
 
   } catch (err) {
-    _showAlert(alert, `Gagal memproses klaim: ${err.message}`);
+    _showAlert(alert, `Gagal memproses prediksi: ${err.message}`);
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = '🔍 Analisis Klaim';
+      btn.innerHTML = '🔮 Prediksi CBG & Tarif';
     }
   }
 }
 
 /**
- * Render the full-assessment API response into the result section.
+ * Render the full-assessment API response (surrogate grouper format).
  * @param {Object} data  API response from /full-assessment
  */
 function _renderResult(data) {
   const section = document.getElementById('result-section');
   if (!section) return;
 
-  const pred   = data.prediction   || {};
-  const fin    = data.financial    || {};
-  const rec    = data.recommendation || {};
-  const outcome = pred.prediction  || 'grouping_valid';
-  const conf   = pred.confidence   || {};
-  const cls    = OUTCOME_CLASS[outcome] || 'valid';
-  const expl   = pred.explanation  || [];
+  const pred = data.prediction   || {};
+  const fin  = data.financial    || {};
+  const rec  = data.recommendation || {};
 
-  // ── Outcome badge ──────────────────────────────────────────
-  const outcomeBadgeEl = document.getElementById('outcome-badge');
-  if (outcomeBadgeEl) outcomeBadgeEl.innerHTML = getOutcomeBadgeHTML(outcome);
+  const cbgCode     = pred.predicted_cbg_code        || '—';
+  const cbgDesc     = pred.predicted_cbg_description || '';
+  const mdc         = pred.predicted_mdc             || '?';
+  const mdcDesc     = pred.predicted_mdc_description || '';
+  const severity    = pred.predicted_severity        || '?';
+  const sevLabel    = pred.predicted_severity_label  || '';
+  const mdcConf     = Math.round((pred.mdc_confidence     || 0) * 100);
+  const sevConf     = Math.round((pred.severity_confidence || 0) * 100);
+  const lookupMethod = pred.lookup_method            || 'none';
+  const tariffByKelas = pred.tariff_by_kelas         || {};
+  const kelas       = document.getElementById('kelas') ? document.getElementById('kelas').value : 'kelas_3';
+  const shap        = pred.shap_explanation          || [];
 
-  // ── Confidence bar ─────────────────────────────────────────
-  const validPct      = Math.round((conf.grouping_valid    || 0) * 100);
-  const incompletePct = Math.round((conf.coding_incomplete || 0) * 100);
-  const invalidPct    = Math.round((conf.grouping_invalid  || 0) * 100);
+  // ── CBG headline ───────────────────────────────────────────
+  const headlineEl = document.getElementById('cbg-headline');
+  if (headlineEl) {
+    headlineEl.innerHTML = `
+      <div class="cbg-code-large">${cbgCode}</div>
+      <div class="cbg-desc-text">${cbgDesc}</div>
+    `;
+  }
 
-  _setWidth('seg-valid',      validPct      + '%');
-  _setWidth('seg-incomplete', incompletePct + '%');
-  _setWidth('seg-invalid',    invalidPct    + '%');
-  _setText('conf-valid-label',      `Valid ${validPct}%`);
-  _setText('conf-incomplete-label', `Incomplete ${incompletePct}%`);
-  _setText('conf-invalid-label',    `Invalid ${invalidPct}%`);
+  // ── MDC + Severity + Lookup badges ─────────────────────────
+  const badgesEl = document.getElementById('badges-row');
+  if (badgesEl) {
+    let lookupBadge;
+    if (lookupMethod === 'exact') {
+      lookupBadge = `<span class="badge-pill badge-exact">✓ Exact Match</span>`;
+    } else if (lookupMethod === 'none') {
+      lookupBadge = `<span class="badge-pill badge-none">⚠ Tidak Ditemukan</span>`;
+    } else {
+      lookupBadge = `<span class="badge-pill badge-approx">~ Aproximasi</span>`;
+    }
+    badgesEl.innerHTML = `
+      <span class="badge-pill badge-mdc">MDC ${mdc} — ${mdcDesc}</span>
+      <span class="badge-pill badge-sev">Severity ${severity} — ${sevLabel}</span>
+      ${lookupBadge}
+    `;
+  }
 
-  // ── Financial metrics ──────────────────────────────────────
-  _setText('metric-base-tariff',  formatIDR(fin.reimbursement_amount));
+  // ── Confidence bars ────────────────────────────────────────
+  _setWidth('seg-mdc', mdcConf + '%');
+  _setText('conf-mdc-label', `MDC: ${mdcConf}% kepercayaan`);
+  _setWidth('seg-sev', sevConf + '%');
+  _setText('conf-sev-label', `Severity: ${sevConf}% kepercayaan`);
+
+  // ── Tariff metrics ─────────────────────────────────────────
+  _setText('metric-base-tariff', formatIDR(pred.predicted_base_tariff || 0));
+  _setText('metric-kelas-tariff', formatIDR(tariffByKelas[kelas] || pred.predicted_base_tariff || 0));
   _setHTML('metric-gap',
-    formatIDR(fin.financial_gap) +
+    formatIDR(fin.financial_gap || 0) +
     `<div class="mt-4">${getRiskBadgeHTML(fin.risk_level)}</div>`
-  );
-  const probPct = Math.round((fin.reimbursement_probability || 0) * 100);
-  _setHTML('metric-prob',
-    `<span>${probPct}%</span>
-     <div class="prob-bar-track mt-4">
-       <div class="prob-bar-fill" style="width:${probPct}%"></div>
-     </div>`
   );
 
   // ── SHAP chart ─────────────────────────────────────────────
-  _renderShapChart(expl);
+  _renderShapChart(shap);
 
   // ── Recommendation box ─────────────────────────────────────
   const recBox = document.getElementById('rec-box');
   if (recBox) {
-    recBox.className = `recommendation-box ${cls}`;
     const action = rec.primary_action || 'REVIEW';
-    const recs   = rec.recommendations || [];
-    const tips   = rec.coding_tips     || [];
+    // Color recommendation box by confidence: green=high, amber=medium, red=low/none
+    let recCls = 'valid';
+    if (lookupMethod === 'none' || mdcConf < 60)       recCls = 'invalid';
+    else if (mdcConf < 80 || lookupMethod !== 'exact')  recCls = 'incomplete';
 
-    let recsHtml = recs.slice(0, 3).map(r =>
-      `<li><span>${r.action} — <span class="text-muted">${r.reason}</span></span></li>`
+    recBox.className = `recommendation-box ${recCls}`;
+
+    const recs = (rec.recommendations || []).slice(0, 4);
+    const tips = rec.coding_tips || [];
+
+    const recsHtml = recs.map(r =>
+      `<li><strong>${r.action}</strong> — <span class="text-muted">${r.reason}</span></li>`
     ).join('');
 
-    let tipsHtml = '';
-    if (tips.length) {
-      tipsHtml = `<div class="coding-tips">
+    const tipsHtml = tips.length ? `
+      <div class="coding-tips">
         <div class="coding-tips-title">💡 Coding Tips</div>
         ${tips.map(t => `<div class="coding-tip-item">• ${t}</div>`).join('')}
-      </div>`;
-    }
+      </div>` : '';
 
     recBox.innerHTML = `
-      <span class="rec-action-badge ${action}">${action.replace('_', ' ')}</span>
+      <span class="rec-action-badge ${action}">${action.replace(/_/g, ' ')}</span>
       <div class="rec-summary">${rec.summary || ''}</div>
       <ul class="rec-list">${recsHtml}</ul>
       ${tipsHtml}

@@ -1,75 +1,73 @@
 import time
 
 from flask import Blueprint, jsonify, request
-from src.services import predictor, explainer
+from src.services.surrogate_grouper import SurrogateGrouper
 from src.services.financial_estimator import FinancialEstimator
 
 api_bp = Blueprint('api', __name__)
 
+_grouper            = SurrogateGrouper()
 _financial_estimator = FinancialEstimator()
 
 
 def _save_prediction_async(payload: dict) -> None:
     """
     Persist a prediction result to the database in a non-blocking manner.
-    If the DB write fails for any reason the API response is not affected.
-
-    Args:
-        payload: Combined dict with 'prediction', 'financial', 'recommendation',
-                 and 'request_body' keys.
+    DB failure must never block the API response.
     """
     try:
         from src.models.crud import save_prediction
         save_prediction(payload)
     except Exception:
-        pass  # DB failure must never block the API response
+        pass
 
 
 @api_bp.route('/health', methods=['GET'])
 def health():
     try:
-        model_name = predictor.get_model_name()
-        loaded     = predictor.is_loaded()
+        _grouper._load()
+        model_loaded = True
+        model_name   = "SurrogateGrouper (MDC+Severity XGBoost + CBG Lookup)"
     except Exception:
-        model_name = "unknown"
-        loaded     = False
+        model_loaded = False
+        model_name   = "unavailable"
     return jsonify({
         "status":       "ok",
-        "model_loaded": loaded,
+        "model_loaded": model_loaded,
         "model_name":   model_name,
-        "version":      "1.0.0",
-        "dataset_size": 9887,
+        "version":      "2.0.0",
+        "architecture": "2-stage surrogate INACBG grouper",
     })
 
 
 @api_bp.route('/predict', methods=['POST'])
 def predict():
+    """
+    POST /api/v1/predict
+
+    Predict CBG code and base tariff from clinical inputs.
+
+    Request JSON (minimal clinical inputs only — no grouper result fields):
+        primary_icd10   (str): e.g. "I10"
+        icd9_procedure  (str): e.g. "89.09" (optional)
+        inacbg_icd10    (str): e.g. "I10" (defaults to primary_icd10)
+        care_type       (str): "outp" | "inp" | "emd" | "gp"
+        entry_type      (str): "gp" | "outp" | "emd" | "inp" | ...
+        kelas           (str): "kelas_1" | "kelas_2" | "kelas_3"
+        episodes        (int): default 1
+
+    Response: full surrogate grouper output dict
+    """
     raw = request.get_json(silent=True)
     if not raw:
         return jsonify({"status": "error", "message": "Invalid or missing JSON body"}), 400
 
     try:
-        result = predictor.predict(raw)
+        result = _grouper.predict(raw)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-    # SHAP explanation
-    try:
-        label_enc   = predictor.get_label_encoder()
-        classes     = list(label_enc.classes_)
-        pred_idx    = classes.index(result["prediction"])
-        explanation = explainer.explain(result["features"], predicted_class_idx=pred_idx)
-    except Exception as e:
-        explanation = [{"feature": "unavailable", "impact": 0.0,
-                        "direction": "positive", "error": str(e)}]
-
-    return jsonify({
-        "prediction":  result["prediction"],
-        "confidence":  result["confidence"],
-        "explanation": explanation,
-        "model_used":  result["model_used"],
-        "status":      "success",
-    })
+    return jsonify(result), 200
 
 
 @api_bp.route('/financial-impact', methods=['POST'])
@@ -77,41 +75,27 @@ def financial_impact():
     """
     POST /api/v1/financial-impact
 
-    Estimate BPJS reimbursement risk for a claim given its prediction outcome
-    and tariff data.
+    Estimate BPJS reimbursement risk using surrogate grouper output.
 
     Request JSON:
-        prediction_result (dict): Output of /predict (must contain "prediction" key)
-        base_tariff       (float): Official INA-CBGs base rate (IDR)
-        actual_tariff     (float): Amount hospital submitted
-        kelas             (str):   "kelas_1" | "kelas_2" | "kelas_3"
-        inacbg_cbg_code   (str):   INA-CBGs CBG code  (e.g. "Q-5-44-0")
-        inacbg_cbg_desc   (str):   CBG description
-
-    Response JSON: full financial assessment dict + cbg_code + cbg_description + status
+        grouper_result  (dict): Output of /predict
+        actual_tariff   (float): Amount hospital will charge
+        kelas           (str):  "kelas_1" | "kelas_2" | "kelas_3"
     """
     body = request.get_json(silent=True)
     if not body:
         return jsonify({"status": "error", "message": "Invalid or missing JSON body"}), 400
 
-    prediction_result = body.get("prediction_result", {})
-    if not prediction_result.get("prediction"):
-        return jsonify({"status": "error", "message": "prediction_result.prediction is required"}), 400
-
-    claim_data = {
-        "base_tariff":   body.get("base_tariff", 0),
-        "actual_tariff": body.get("actual_tariff", 0),
-        "kelas":         body.get("kelas", "kelas_3"),
-    }
+    grouper_result = body.get("grouper_result") or body.get("prediction_result", {})
+    actual_tariff  = float(body.get("actual_tariff", 0) or 0)
+    kelas          = str(body.get("kelas", "kelas_3"))
 
     try:
-        result = _financial_estimator.estimate(prediction_result, claim_data)
+        result = _financial_estimator.estimate(grouper_result, actual_tariff, kelas)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-    result["cbg_code"]        = body.get("inacbg_cbg_code", "")
-    result["cbg_description"] = body.get("inacbg_cbg_desc", "")
-    result["status"]          = "success"
+    result["status"] = "success"
     return jsonify(result), 200
 
 
@@ -120,13 +104,11 @@ def recommend():
     """
     POST /api/v1/recommend
 
-    Generate actionable Casemix coding recommendations by synthesising
-    the ML prediction, financial risk assessment, and SHAP explanation.
+    Generate Casemix coding recommendations from grouper + financial results.
 
     Request JSON:
-        prediction_result (dict): from /predict
-        financial_result  (dict): from /financial-impact
-        explanation       (list): SHAP feature list from /predict
+        grouper_result   (dict): from /predict
+        financial_result (dict): from /financial-impact
     """
     body = request.get_json(silent=True)
     if not body:
@@ -136,9 +118,8 @@ def recommend():
         from src.services.recommender import RecommendationEngine
         engine = RecommendationEngine()
         result = engine.synthesize(
-            prediction_result=body.get("prediction_result", {}),
+            grouper_result=body.get("grouper_result", {}),
             financial_result=body.get("financial_result", {}),
-            explanation=body.get("explanation", []),
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -152,19 +133,18 @@ def full_assessment():
     """
     POST /api/v1/full-assessment
 
-    Single unified endpoint that executes the full DSS pipeline:
-        1. ML prediction  (/predict logic)
-        2. Financial risk  (/financial-impact logic)
-        3. Recommendation  (/recommend logic)
-    Returns all three results combined.  This is the primary endpoint for
-    the frontend dashboard.
+    Unified endpoint: clinical input → CBG prediction + financial risk + recommendation.
 
-    Request JSON: same schema as /predict, plus optional tariff fields:
-        base_tariff    (float, default 0)
-        actual_tariff  (float, default 0)
-        kelas          (str,   default "kelas_3")
-        inacbg_cbg_code (str)
-        inacbg_cbg_desc (str)
+    Request JSON (clinical inputs only):
+        primary_icd10   (str)
+        icd9_procedure  (str, optional)
+        inacbg_icd10    (str, optional — defaults to primary_icd10)
+        care_type       (str): "outp" | "inp" | "emd" | "gp"
+        entry_type      (str)
+        kelas           (str): "kelas_1" | "kelas_2" | "kelas_3"
+        episodes        (int, default 1)
+        actual_tariff   (float): what the hospital plans to charge
+        source          (str, default "manual"): "manual" | "neurovi"
     """
     body = request.get_json(silent=True)
     if not body:
@@ -172,50 +152,28 @@ def full_assessment():
 
     t_start = time.time()
 
-    # 1 — Predict
+    # 1 — Surrogate grouper: CBG prediction
     try:
-        pred_result = predictor.predict(body)
+        grouper_result = _grouper.predict(body)
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Prediction failed: {e}"}), 500
+        return jsonify({"status": "error", "message": f"Grouper failed: {e}"}), 500
 
-    # 2 — SHAP explanation
+    # 2 — Financial risk (base_tariff auto-predicted by grouper)
+    actual_tariff = float(body.get("actual_tariff", 0) or 0)
+    kelas         = str(body.get("kelas", "kelas_3"))
     try:
-        label_enc   = predictor.get_label_encoder()
-        classes     = list(label_enc.classes_)
-        pred_idx    = classes.index(pred_result["prediction"])
-        explanation = explainer.explain(pred_result["features"], predicted_class_idx=pred_idx)
+        financial_result = _financial_estimator.estimate(grouper_result, actual_tariff, kelas)
     except Exception as e:
-        explanation = [{"feature": "unavailable", "impact": 0.0,
-                        "direction": "positive", "error": str(e)}]
+        financial_result = {"error": str(e), "risk_level": "MEDIUM",
+                            "reimbursement_amount": 0, "financial_gap": 0}
 
-    prediction_payload = {
-        "prediction": pred_result["prediction"],
-        "confidence": pred_result["confidence"],
-        "model_used": pred_result["model_used"],
-        "explanation": explanation,
-    }
-
-    # 3 — Financial impact
-    claim_data = {
-        "base_tariff":   body.get("base_tariff", 0),
-        "actual_tariff": body.get("actual_tariff", 0),
-        "kelas":         body.get("kelas", "kelas_3"),
-    }
-    try:
-        financial_result = _financial_estimator.estimate(prediction_payload, claim_data)
-        financial_result["cbg_code"]        = body.get("inacbg_cbg_code", "")
-        financial_result["cbg_description"] = body.get("inacbg_cbg_desc", "")
-    except Exception as e:
-        financial_result = {"error": str(e)}
-
-    # 4 — Recommendations
+    # 3 — Recommendations
     try:
         from src.services.recommender import RecommendationEngine
         engine = RecommendationEngine()
         recommendation = engine.synthesize(
-            prediction_result=prediction_payload,
+            grouper_result=grouper_result,
             financial_result=financial_result,
-            explanation=explanation,
         )
     except Exception as e:
         recommendation = {"error": str(e)}
@@ -223,20 +181,20 @@ def full_assessment():
     elapsed_ms = round((time.time() - t_start) * 1000)
 
     response_payload = {
-        "prediction":         prediction_payload,
+        "prediction":         grouper_result,
         "financial":          financial_result,
         "recommendation":     recommendation,
         "processing_time_ms": elapsed_ms,
         "status":             "success",
     }
 
-    # Persist to DB non-blocking — failure must not affect response
+    # Persist to DB (non-blocking)
     _save_prediction_async({
-        "prediction":    prediction_payload,
-        "financial":     financial_result,
+        "prediction":     grouper_result,
+        "financial":      financial_result,
         "recommendation": recommendation,
-        "request_body":  body,
-        "source":        body.get("source", "manual"),
+        "request_body":   body,
+        "source":         body.get("source", "manual"),
     })
 
     return jsonify(response_payload), 200
@@ -245,11 +203,7 @@ def full_assessment():
 @api_bp.route('/stats', methods=['GET'])
 def stats():
     """
-    GET /api/v1/stats
-
-    Return aggregated statistics from the predictions table for the
-    analytics dashboard.  Includes label distribution, financial risk summary,
-    and the last 5 predictions for the recent-predictions widget.
+    GET /api/v1/stats — aggregated stats for analytics dashboard.
     """
     try:
         from src.models.crud import get_stats_summary, get_prediction_history

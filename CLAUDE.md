@@ -175,6 +175,20 @@ Final result: grouping_valid / coding_incomplete / grouping_invalid
 | T4.3 Thesis Ch.4 Draft (DB + UI Design) | SCRUM-31 | ✅ Done |
 | T4.4 Sprint 4 Housekeeping + Git | SCRUM-32 | ✅ Done |
 
+### Sprint 5 (May 5–11) — Architecture Rebuild
+
+| Task | Description | Status |
+|---|---|---|
+| T5.1 Extract clinical training data | `notebooks/04_surrogate_grouper_training.py` Step 1 | ✅ Done |
+| T5.2 Build CBG lookup table | 3-level fallback, 100% coverage | ✅ Done |
+| T5.3 Train MDC predictor | XGBoost 20-class, accuracy=77.22% | ✅ Done |
+| T5.4 Train Severity predictor | XGBoost 4-class, accuracy=92.21% | ✅ Done |
+| T5.5 SurrogateGrouper service | `src/services/surrogate_grouper.py` | ✅ Done |
+| T5.6 Update API routes | Clinical-only inputs, new /predict + /full-assessment | ✅ Done |
+| T5.7 Update Frontend | New form + CBG headline + badge row + dual confidence | ✅ Done |
+| T5.8 Update test suite | 91/91 tests passing | ✅ Done |
+| T5.9 Housekeeping | Status script + CLAUDE.md + git commit | ✅ Done |
+
 ---
 
 ## API Endpoints
@@ -225,29 +239,63 @@ Hooks in place:
 
 ---
 
-## Model Performance (Sprint 2 Results)
+## ML Architecture — Surrogate INACBG Grouper (v2, Sprint 5)
 
-| Model | Accuracy | Weighted F1 | AUC-ROC |
+> **Architecture rebuilt** from a flawed 3-class post-grouper predictor to a clinically
+> correct 2-stage surrogate grouper. Inputs are now clinical-only (no circular feedback
+> from grouper output). Training data: 3,076 records from tamtech_raw_extract.csv
+> (ml_label == 'grouping_valid', excluding MDC P and X-0-98-X codes).
+
+### Stage 1 — MDC Predictor
+
+| Property | Value |
+|---|---|
+| Model | XGBoost (multi:softprob, 20 classes) |
+| Accuracy | **77.22%** |
+| Weighted F1 | **0.7747** |
+| Training records | 3,076 |
+| MDC classes | A B D E F G H I J K L M N O Q S U V W Z |
+| Key features | icd_chapter, icd_block_freq, is_outpatient, care_type_enc |
+| Artifact | `models/mdc_predictor.pkl` |
+
+### Stage 2 — Severity Predictor
+
+| Property | Value |
+|---|---|
+| Model | XGBoost (multi:softprob, 4 classes) |
+| Accuracy | **92.21%** |
+| Weighted F1 | **0.9251** |
+| Severity classes | 0 (outpatient), I (mild), II (moderate), III (severe) |
+| Key feature | is_outpatient (near-perfect predictor for severity 0) |
+| Artifact | `models/severity_predictor.pkl` |
+
+### Stage 3 — CBG Lookup
+
+| Property | Value |
+|---|---|
+| Type | Deterministic lookup table (3-level fallback) |
+| Primary key | (icd_block, care_type_str, kelas, severity) |
+| Exact coverage | **100%** of training records |
+| Fallback 1 | (mdc_letter, severity, kelas) |
+| Fallback 2 | (mdc_letter, severity) |
+| Artifact | `models/cbg_lookup_table.pkl` |
+
+### SHAP Explainability
+
+- TreeExplainer on MDC predictor → top 3 feature contributions per prediction
+- Output: `[{"feature": str, "impact": float, "direction": "positive"|"negative"}]`
+- Fallback to `feature_importances_` when TreeExplainer fails
+
+### Legacy Model Performance (Sprint 2 — Retired)
+
+> Retired 3-class predictor — accuracy was artificially high (99.85%) because it
+> used post-grouper fields as features, creating circular reasoning.
+
+| Model | Accuracy | Weighted F1 | Note |
 |---|---|---|---|
-| Random Forest (baseline) | 99.85% | 0.9985 | 1.0000 |
-| **XGBoost (primary — DEPLOYED)** | **99.85%** | **0.9985** | **0.9996** |
-| LightGBM | 99.85% | 0.9985 | 0.9997 |
-
-- Best model saved: `models/best_model.pkl` (XGBoost, 150 iterations)
-- Top SHAP features: `final_success`, `claim_stage`, `inacbg_primary_icd10`, `entry_type`, `claim_status`
-- SHAP plots: `docs/shap_plots/`
-
----
-
-## ML Model Plan (Sprint 2)
-
-- **Primary model:** XGBoost
-- **Secondary model:** LightGBM  
-- **Baseline:** Random Forest
-- **Target accuracy:** ≥85% on test set
-- **Explainability:** SHAP TreeExplainer — top 3 features per prediction
-- **Evaluation:** Accuracy, F1-score (weighted), AUC-ROC (one-vs-rest)
-- **Train/test split:** 80/20 stratified by ml_label
+| XGBoost (v1) | 99.85% | 0.9985 | Retired — circular features |
+| LightGBM (v1) | 99.85% | 0.9985 | Retired |
+| Random Forest | 99.85% | 0.9985 | Baseline only |
 
 ---
 

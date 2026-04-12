@@ -3,20 +3,21 @@ Financial Impact Estimator Module
 ===================================
 Estimates reimbursement risk for BPJS claims based on INA-CBGs tariff logic.
 
-Business Rules:
-- base_tariff  : official INA-CBGs rate for this CBG code + kelas combination
-- actual_tariff: what the hospital submitted / charged the patient
-- Kelas multipliers (INA-CBGs official):
-    kelas_1 = base_tariff × 1.50  (premium ward — hospital may charge up to ceiling)
-    kelas_2 = base_tariff × 1.25
-    kelas_3 = base_tariff × 1.00  (standard BPJS ward, fully covered at base rate)
-- Financial risk = gap between submitted amount and BPJS reimbursement ceiling
-- If grouping_invalid → full tariff forfeited; hospital absorbs ALL cost (CRITICAL)
-- If coding_incomplete → claim delayed ≈30 days; cash flow risk (HIGH)
-- If grouping_valid but submitted > ceiling → partial absorption (LOW/MEDIUM/HIGH)
+v2 — Updated for the Surrogate INACBG Grouper architecture:
+  - Base tariff is now AUTO-PREDICTED by SurrogateGrouper (not user-supplied)
+  - actual_tariff is still user-supplied (what the hospital plans to charge)
+  - Risk is driven by MDC confidence + lookup method + tariff gap
 
-This module is used by the /api/v1/financial-impact endpoint and internally
-by the /api/v1/full-assessment unified endpoint.
+Business Rules:
+- predicted_base_tariff: SurrogateGrouper output (kelas_3 INA-CBGs rate)
+- actual_tariff: what the hospital submitted / plans to charge
+- Kelas multipliers (INA-CBGs official):
+    kelas_1 = base_tariff × 1.50  (premium ward)
+    kelas_2 = base_tariff × 1.25
+    kelas_3 = base_tariff × 1.00  (standard BPJS ward)
+- Financial risk = gap between actual and BPJS reimbursement ceiling
+- Confidence risk: mdc_confidence < 0.60 → prediction uncertain → elevated risk
+- Lookup risk: lookup_method == 'none' → CBG unknown → CRITICAL
 """
 
 from __future__ import annotations
@@ -65,26 +66,25 @@ class FinancialEstimator:
     """
     Estimates BPJS reimbursement risk for a single claim.
 
-    Combines the ML prediction outcome (grouping_valid / coding_incomplete /
-    grouping_invalid) with tariff data from the INA-CBGs schedule to produce
-    a structured financial risk assessment that the Casemix coder and hospital
-    finance team can act on.
+    v2: Accepts SurrogateGrouper output as first argument.
+    base_tariff is now AUTO-PREDICTED; actual_tariff is user-supplied.
 
     Usage:
         estimator = FinancialEstimator()
-        result = estimator.estimate(prediction_result, claim_data)
+        result = estimator.estimate(grouper_result, actual_tariff, kelas)
     """
 
-    def estimate(self, prediction_result: Dict[str, Any], claim_data: Dict[str, Any]) -> Dict[str, Any]:
+    def estimate(self, grouper_result: Dict[str, Any],
+                 actual_tariff: float, kelas: str = "kelas_3") -> Dict[str, Any]:
         """
         Produce a full financial risk assessment for one claim.
 
         Args:
-            prediction_result: Output dict from predictor.predict().
-                Must contain at minimum: {"prediction": str, "confidence": dict}
-            claim_data: Raw claim fields from the API request.
-                Expected keys: base_tariff (float), actual_tariff (float),
-                kelas (str), inacbg_cbg_code (str), inacbg_cbg_desc (str).
+            grouper_result: Output dict from SurrogateGrouper.predict().
+                Must contain: predicted_base_tariff, tariff_by_kelas,
+                mdc_confidence, severity_confidence, lookup_method.
+            actual_tariff:  What the hospital plans to charge (IDR).
+            kelas:          Ward class — "kelas_1" | "kelas_2" | "kelas_3".
 
         Returns:
             dict with keys:
@@ -98,29 +98,31 @@ class FinancialEstimator:
                 cash_flow_risk_days     (int)   — expected delay before reimbursement
                 reimbursement_probability (float) — 0.0–1.0 probability of eventual payment
         """
-        grouping_outcome = prediction_result.get("prediction", "grouping_valid")
-        base_tariff      = float(claim_data.get("base_tariff", 0) or 0)
-        actual_tariff    = float(claim_data.get("actual_tariff", 0) or 0)
-        kelas            = str(claim_data.get("kelas", "kelas_3")).strip().lower()
+        actual_tariff     = float(actual_tariff or 0)
+        kelas             = str(kelas or "kelas_3").strip().lower()
+        mdc_confidence    = float(grouper_result.get("mdc_confidence", 1.0))
+        lookup_method     = grouper_result.get("lookup_method", "exact")
 
-        # --- Derived calculations ------------------------------------------------
-        reimbursement_ceiling = self._calculate_reimbursement_ceiling(base_tariff, kelas)
+        # Kelas-adjusted tariff from grouper (already multiplied)
+        tariff_by_kelas   = grouper_result.get("tariff_by_kelas", {})
+        reimbursement_ceiling = float(
+            tariff_by_kelas.get(kelas,
+                grouper_result.get("predicted_base_tariff", 0) or 0)
+        )
 
-        # Gap = submitted - ceiling; positive = hospital absorbs; negative = underbilled
+        # Gap = submitted - ceiling; positive = hospital absorbs
         financial_gap = actual_tariff - reimbursement_ceiling
         gap_pct       = round((financial_gap / reimbursement_ceiling * 100), 2) if reimbursement_ceiling > 0 else 0.0
+        tariff_ratio  = round(actual_tariff / reimbursement_ceiling, 4) if reimbursement_ceiling > 0 else 1.0
 
-        # Tariff ratio used for risk band classification
-        tariff_ratio = round(actual_tariff / reimbursement_ceiling, 4) if reimbursement_ceiling > 0 else 1.0
-
-        risk_level    = self._calculate_risk_level(grouping_outcome, tariff_ratio)
-        risk_expl     = self._build_risk_explanation(grouping_outcome, risk_level, financial_gap, gap_pct)
-
-        # Hospital only loses the positive gap (negative gap = no loss)
-        estimated_loss = max(0.0, financial_gap) if grouping_outcome == "grouping_valid" else actual_tariff
-
-        cash_flow_days    = self._estimate_cash_flow_risk(grouping_outcome)
-        reimb_probability = self._calculate_reimbursement_probability(grouping_outcome, risk_level)
+        risk_level    = self._calculate_risk_level_v2(mdc_confidence, lookup_method, tariff_ratio)
+        risk_expl     = self._build_risk_explanation_v2(
+            risk_level, mdc_confidence, lookup_method, financial_gap, gap_pct,
+            grouper_result.get("predicted_cbg_code", "")
+        )
+        estimated_loss     = max(0.0, financial_gap)
+        cash_flow_days     = self._estimate_cash_flow_from_confidence(mdc_confidence, lookup_method)
+        reimb_probability  = self._calculate_reimbursement_probability_v2(risk_level)
 
         return {
             "reimbursement_amount":       round(reimbursement_ceiling, 2),
@@ -134,7 +136,64 @@ class FinancialEstimator:
             "reimbursement_probability":  reimb_probability,
         }
 
-    # ── Private helpers ────────────────────────────────────────────────────────
+    # ── v2 Private helpers (surrogate grouper) ────────────────────────────────
+
+    def _calculate_risk_level_v2(self, mdc_confidence: float,
+                                  lookup_method: str, tariff_ratio: float) -> str:
+        if lookup_method == 'none':
+            return "CRITICAL"
+        if mdc_confidence < 0.60:
+            return "HIGH"
+        if tariff_ratio > RISK_THRESHOLDS["MEDIUM"]:
+            return "HIGH"
+        if tariff_ratio > RISK_THRESHOLDS["LOW"]:
+            return "MEDIUM"
+        if lookup_method != 'exact':
+            return "MEDIUM"   # approximate lookup → slight uncertainty
+        return "LOW"
+
+    def _build_risk_explanation_v2(self, risk_level: str, mdc_confidence: float,
+                                    lookup_method: str, financial_gap: float,
+                                    gap_pct: float, cbg_code: str) -> str:
+        if risk_level == "CRITICAL":
+            return (
+                "CRITICAL: CBG code could not be determined from the given ICD-10 input. "
+                "Verify primary diagnosis code and care type before submission."
+            )
+        confidence_note = ""
+        if mdc_confidence < 0.60:
+            confidence_note = f" (MDC confidence: {mdc_confidence*100:.0f}% — verify ICD coding)"
+        lookup_note = ""
+        if lookup_method != 'exact':
+            lookup_note = f" CBG lookup used approximate fallback ({lookup_method})."
+
+        if financial_gap > 0:
+            gap_msg = (
+                f"Submitted amount exceeds INA-CBGs ceiling by {gap_pct:.1f}% "
+                f"(IDR {financial_gap:,.0f}). This portion will not be reimbursed."
+            )
+        elif financial_gap < 0:
+            gap_msg = "Submitted amount is within the INA-CBGs reimbursement ceiling."
+        else:
+            gap_msg = "Submitted amount matches the INA-CBGs ceiling exactly."
+
+        return f"{risk_level}: {gap_msg}{confidence_note}{lookup_note}"
+
+    def _estimate_cash_flow_from_confidence(self, mdc_confidence: float,
+                                             lookup_method: str) -> int:
+        if lookup_method == 'none':
+            return 90
+        if mdc_confidence < 0.60:
+            return 30
+        if lookup_method != 'exact':
+            return 14
+        return 0
+
+    def _calculate_reimbursement_probability_v2(self, risk_level: str) -> float:
+        mapping = {"LOW": 0.95, "MEDIUM": 0.80, "HIGH": 0.60, "CRITICAL": 0.10}
+        return mapping.get(risk_level, 0.80)
+
+    # ── Legacy private helpers (kept for backward compatibility) ──────────────
 
     def _calculate_reimbursement_ceiling(self, base_tariff: float, kelas: str) -> float:
         """

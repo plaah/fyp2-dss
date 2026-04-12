@@ -34,6 +34,7 @@ LOW_CARD_CATS = [
     "claim_month_year",
     "kelas",
     "idrg_icd9_valid",   # real values: '0'/'1'/NaN; synthetic may add slight noise
+    "icd_chapter",       # derived: first letter of idrg_primary_icd10
 ]
 
 # High-cardinality string columns → frequency encoding
@@ -43,7 +44,28 @@ HIGH_CARD_CATS = [
     "inacbg_cbg_code",
     "claim_stage",    # synthetic artifact inflated cardinality to ~999
     "entry_type",     # synthetic artifact inflated cardinality to ~998
+    "icd_block",      # derived: first 3 chars of idrg_primary_icd10 (~hundreds of blocks)
 ]
+
+# ICD-10 codes that BPJS/INA-CBGs rejects when used as a primary diagnosis.
+# Excludes Z/R ranges (captured separately by is_z_code / is_r_code).
+# Sources: BPJS Kesehatan grouper rejection logs + INA-CBGs 5.3 coding rules.
+KNOWN_INVALID_PRIMARY: frozenset = frozenset({
+    # Unspecified injury / poisoning catch-alls
+    "T78.4", "T78.40", "T78.9",
+    # Non-specific symptoms already covered by R-chapter but sometimes miscoded
+    "R69",                          # Unknown and unspecified cause of morbidity
+    # External cause codes (V/W/X/Y) — not valid as primary clinical diagnosis
+    "V99", "W19", "X59", "Y84", "Y99",
+    # Chapter U (COVID provisional) — some grouper versions reject as primary
+    "U07.1", "U07.2", "U09.9",
+    # Contact / exposure codes (Z-adjacents sometimes miscoded without Z prefix)
+    "Z03.8", "Z04.9",
+    # Unspecified aftercare
+    "Z09", "Z54.9",
+    # Observation without diagnosis confirmed
+    "Z03.9",
+})
 
 # idrg_icd10_valid: nominally binary but GaussianCopula generated float strings
 # → coerce to float directly (numeric treatment)
@@ -178,6 +200,39 @@ def _engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     if "idrg_icd9_procedure" in df.columns:
         df["has_procedure"] = df["idrg_icd9_procedure"].notna().astype(int)
         print(f"    has_procedure distribution: {df['has_procedure'].value_counts().to_dict()}")
+
+    # ── ICD-10 structural features (derived from idrg_primary_icd10) ──────────
+    if "idrg_primary_icd10" in df.columns:
+        icd = df["idrg_primary_icd10"].astype(str).str.strip().str.upper()
+
+        # icd_chapter: first letter — encodes WHO ICD-10 chapter
+        # (A=infectious, C=neoplasm, I=circulatory, J=respiratory, …)
+        df["icd_chapter"] = icd.str[0].where(icd.str[0].str.isalpha(), other="X")
+        print(f"    icd_chapter top-5: {df['icd_chapter'].value_counts().head(5).to_dict()}")
+
+        # icd_block: first 3 characters — encodes ICD-10 block (e.g. I10, J18, E11)
+        # Frequency-encoded in _encode; retains granularity without sparse one-hot
+        df["icd_block"] = icd.str[:3].where(icd.str[:3] != "NAN", other="UNK")
+        print(f"    icd_block unique values: {df['icd_block'].nunique()}")
+
+        # is_z_code: administrative / follow-up codes — elevated rejection risk
+        df["is_z_code"] = icd.str.startswith("Z").astype(int)
+        print(f"    is_z_code positives: {df['is_z_code'].sum()} "
+              f"({df['is_z_code'].mean()*100:.1f}%)")
+
+        # is_r_code: symptom / sign codes — insufficient specificity for INA-CBGs
+        df["is_r_code"] = icd.str.startswith("R").astype(int)
+        print(f"    is_r_code positives: {df['is_r_code'].sum()} "
+              f"({df['is_r_code'].mean()*100:.1f}%)")
+
+        # is_valid_primary: False if code is in the known-invalid primary list
+        # or is a Z / R code (both categories trigger INA-CBGs rejection)
+        df["is_valid_primary"] = (
+            ~icd.str.startswith("Z")
+            & ~icd.str.startswith("R")
+            & ~icd.isin(KNOWN_INVALID_PRIMARY)
+        ).astype(int)
+        print(f"    is_valid_primary=0: {(df['is_valid_primary'] == 0).sum()} rows flagged")
 
     return df
 

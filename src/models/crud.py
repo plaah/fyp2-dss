@@ -40,19 +40,37 @@ def save_prediction(data: Dict[str, Any]) -> Prediction:
     rec_block  = data.get("recommendation", {})
     req_body   = data.get("request_body", {})
 
-    confidence     = pred_block.get("confidence", {})
-    explanation    = pred_block.get("explanation", [])
-    top_shap       = explanation[0].get("feature") if explanation else None
+    # Surrogate grouper v2 — derive ml_prediction from primary_action
+    # (legacy: pred_block had a "prediction" key with the 3-class label)
+    _ACTION_TO_LABEL = {
+        "SUBMIT":        "grouping_valid",
+        "REVIEW":        "grouping_valid",
+        "VERIFY_CODING": "coding_incomplete",
+        "URGENT_RECODE": "grouping_invalid",
+    }
+    primary_action = rec_block.get("primary_action", "")
+    ml_prediction = (
+        _ACTION_TO_LABEL.get(primary_action)
+        or pred_block.get("prediction")   # legacy fallback
+    )
+
+    # SHAP explanation lives in pred_block["shap_explanation"] (surrogate v2)
+    # or pred_block["explanation"] (legacy)
+    shap_exp   = pred_block.get("shap_explanation") or pred_block.get("explanation", [])
+    top_shap   = shap_exp[0].get("feature") if shap_exp else None
+
+    # Legacy confidence sub-dict (v1 only)
+    confidence = pred_block.get("confidence", {})
 
     row = Prediction(
         claim_id                 = req_body.get("claim_id"),
-        idrg_primary_icd10       = req_body.get("idrg_primary_icd10"),
-        inacbg_primary_icd10     = req_body.get("inacbg_primary_icd10"),
-        idrg_icd9_procedure      = req_body.get("idrg_icd9_procedure"),
+        idrg_primary_icd10       = req_body.get("primary_icd10") or req_body.get("idrg_primary_icd10"),
+        inacbg_primary_icd10     = req_body.get("inacbg_icd10") or req_body.get("inacbg_primary_icd10"),
+        idrg_icd9_procedure      = req_body.get("icd9_procedure") or req_body.get("idrg_icd9_procedure"),
         kelas                    = req_body.get("kelas"),
         care_type                = req_body.get("care_type"),
         entry_type               = req_body.get("entry_type"),
-        ml_prediction            = pred_block.get("prediction"),
+        ml_prediction            = ml_prediction,
         confidence_valid         = confidence.get("grouping_valid"),
         confidence_incomplete    = confidence.get("coding_incomplete"),
         confidence_invalid       = confidence.get("grouping_invalid"),
@@ -116,6 +134,11 @@ def get_stats_summary() -> Dict[str, Any]:
     valid_cnt      = counts.get("grouping_valid",    0)
     incomplete_cnt = counts.get("coding_incomplete", 0)
     invalid_cnt    = counts.get("grouping_invalid",  0)
+    # Fold null/unknown labels (from v2 architecture migration) into valid_cnt
+    # so percentages always sum to 100%.
+    other_cnt = total - valid_cnt - incomplete_cnt - invalid_cnt
+    if other_cnt > 0:
+        valid_cnt += other_cnt
 
     def pct(n: int) -> float:
         return round(n / total * 100, 1) if total > 0 else 0.0

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DSS Casemix — Prediksi Grouping ICD</title>
+  <title>DSS Casemix — Prediksi Surrogate Grouper</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css">
@@ -12,7 +12,7 @@
 <body>
 <div class="layout">
 
-  <!-- ═══ SIDEBAR ═══════════════════════════════════════════════════════ -->
+  <!-- ═══ SIDEBAR ════════════════════════════════════════════════════════ -->
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
@@ -42,148 +42,149 @@
       <button class="neurovi-btn" disabled title="Menunggu integrasi Neurovi">
         🏥 Connect Neurovi
       </button>
-      <div class="powered-by">Powered by XGBoost · SHAP</div>
+      <div class="powered-by">Powered by XGBoost · CBG Lookup · SHAP</div>
     </div>
   </aside>
 
-  <!-- ═══ MAIN CONTENT ══════════════════════════════════════════════════ -->
+  <!-- ═══ MAIN CONTENT ═════════════════════════════════════════════════ -->
   <main class="main">
     <div class="page-header">
-      <h1 class="page-title">Prediksi Grouping ICD</h1>
-      <p class="page-subtitle">Masukkan data klaim BPJS untuk mendapatkan prediksi outcome grouping dan analisis risiko finansial.</p>
+      <h1 class="page-title">Input Klinis Dokter</h1>
+      <p class="page-subtitle">Masukkan diagnosis dan rencana tatalaksana pasien untuk mendapatkan prediksi CBG dan estimasi tarif BPJS.</p>
     </div>
 
     <!-- Error Alert -->
     <div id="error-alert" class="alert"></div>
 
-    <!-- ── Section 1: Input Form ──────────────────────────────────────── -->
+    <!-- ── Section 1: Clinical Input Form ─────────────────────────────── -->
     <div class="card">
-      <div class="card-title">Input Klaim BPJS</div>
+      <div class="card-title">Data Klinis Pasien</div>
 
       <div class="form-grid">
-        <!-- Row 1: ICD-10 codes -->
+        <!-- Row 1: ICD-10 diagnosis codes -->
         <div class="form-group">
-          <label for="idrg_primary_icd10">Primary ICD-10 (iDRG) <span class="required">*</span></label>
-          <input type="text" id="idrg_primary_icd10" placeholder="cth. I10, J18.0, E11.9"
-                 autocomplete="off" autocapitalize="characters">
+          <label for="primary_icd10">Diagnosis Utama ICD-10 <span class="required">*</span></label>
+          <input type="text" id="primary_icd10" placeholder="Contoh: I10, J18.0, E11.9"
+                 autocomplete="off" autocapitalize="characters"
+                 oninput="this.value=this.value.toUpperCase()">
+          <div class="form-hint">Diagnosis utama dokter</div>
         </div>
         <div class="form-group">
-          <label for="inacbg_primary_icd10">Primary ICD-10 (INACBG)</label>
-          <input type="text" id="inacbg_primary_icd10" placeholder="cth. I10 (sama dengan iDRG)"
-                 autocomplete="off" autocapitalize="characters">
+          <label for="inacbg_icd10">Kode Diagnosis INACBG</label>
+          <input type="text" id="inacbg_icd10" placeholder="Sama dengan ICD-10 atau lebih spesifik"
+                 autocomplete="off" autocapitalize="characters"
+                 oninput="this.value=this.value.toUpperCase()">
+          <div class="form-hint">Kode diagnosa untuk INACBG grouper</div>
         </div>
 
         <!-- Row 2: Procedure + Care Type -->
         <div class="form-group">
-          <label for="idrg_icd9_procedure">ICD-9 Prosedur (opsional)</label>
-          <input type="text" id="idrg_icd9_procedure" placeholder="cth. 89.09, 93.89">
+          <label for="icd9_procedure">Prosedur ICD-9 (opsional)</label>
+          <input type="text" id="icd9_procedure" placeholder="Contoh: 89.09, 93.39, 57.33">
+          <div class="form-hint">Tindakan/prosedur yang direncanakan</div>
         </div>
         <div class="form-group">
           <label for="care_type">Jenis Pelayanan</label>
           <select id="care_type">
-            <option value="outp">Rawat Jalan (Outp)</option>
-            <option value="inp">Rawat Inap (Inp)</option>
-            <option value="emd">IGD (Emergency)</option>
-            <option value="gp">Poli Umum (GP)</option>
+            <option value="outp">Rawat Jalan</option>
+            <option value="inp">Rawat Inap</option>
+            <option value="emd">IGD / Darurat</option>
+            <option value="gp">Poli Umum</option>
           </select>
         </div>
 
-        <!-- Row 3: Entry + Kelas -->
+        <!-- Row 3: Entry Type + Kelas -->
         <div class="form-group">
           <label for="entry_type">Tipe Masuk</label>
           <select id="entry_type">
-            <option value="gp">Poli Umum (GP)</option>
+            <option value="gp">Poli Umum</option>
             <option value="outp">Rawat Jalan</option>
-            <option value="inp">Rawat Inap</option>
-            <option value="emd">IGD</option>
+            <option value="emd">IGD / Darurat</option>
+            <option value="inp">Rawat Inap Elektif</option>
             <option value="other">Lainnya</option>
           </select>
         </div>
         <div class="form-group">
           <label for="kelas">Kelas Perawatan</label>
           <select id="kelas">
-            <option value="kelas_3" selected>Kelas 3 (Tarif Dasar × 1.00)</option>
-            <option value="kelas_2">Kelas 2 (Tarif Dasar × 1.25)</option>
-            <option value="kelas_1">Kelas 1 (Tarif Dasar × 1.50)</option>
+            <option value="kelas_3" selected>Kelas 3 (Tarif × 1.00)</option>
+            <option value="kelas_2">Kelas 2 (Tarif × 1.25)</option>
+            <option value="kelas_1">Kelas 1 (Tarif × 1.50)</option>
           </select>
         </div>
 
-        <!-- Row 4: Tariffs -->
-        <div class="form-group">
-          <label for="base_tariff">Tarif Dasar INA-CBGs (IDR)</label>
-          <input type="number" id="base_tariff" placeholder="cth. 196100" min="0">
-        </div>
-        <div class="form-group">
-          <label for="actual_tariff">Tarif Aktual Diajukan (IDR)</label>
-          <input type="number" id="actual_tariff" placeholder="cth. 210000" min="0">
-        </div>
-
-        <!-- Row 5: Episodes + Stage -->
+        <!-- Row 4: Episodes + Actual Tariff -->
         <div class="form-group">
           <label for="episodes">Jumlah Episode</label>
-          <input type="number" id="episodes" value="1" min="1" max="999">
+          <input type="number" id="episodes" value="1" min="1" max="10">
         </div>
         <div class="form-group">
-          <label for="claim_stage">Tahap Klaim</label>
-          <select id="claim_stage">
-            <option value="final-claim" selected>Final Claim</option>
-            <option value="idrg">iDRG</option>
-            <option value="inacbg">INACBG</option>
-            <option value="claim-sent">Claim Sent</option>
-          </select>
+          <label for="actual_tariff">Tarif yang Akan Diajukan (Rp)</label>
+          <input type="number" id="actual_tariff" placeholder="cth. 196100" min="0">
+          <div class="form-hint">Tarif dasar akan diprediksi otomatis oleh sistem</div>
         </div>
       </div><!-- /form-grid -->
 
       <button class="btn btn-primary" id="submit-btn" type="button">
-        🔍 Analisis Klaim
+        🔮 Prediksi CBG & Tarif
       </button>
-      <p class="btn-hint">Hasil akan muncul dalam &lt; 1 detik</p>
+      <p class="btn-hint">Hasil prediksi akan muncul dalam &lt; 1 detik</p>
     </div><!-- /input card -->
 
-    <!-- ── Section 2: Result ───────────────────────────────────────────── -->
+    <!-- ── Section 2: Result ─────────────────────────────────────────── -->
     <div id="result-section">
 
+      <!-- CBG Prediction Result (main card) -->
       <div class="card">
-        <div class="card-title">Hasil Prediksi ML</div>
+        <div class="card-title">Hasil Prediksi Surrogate Grouper</div>
 
-        <!-- Outcome badge (big, colored) -->
-        <div id="outcome-badge"></div>
+        <!-- CBG code headline -->
+        <div id="cbg-headline" class="cbg-headline"></div>
 
-        <!-- Confidence bar -->
-        <div class="confidence-bar-wrap">
-          <div class="confidence-label">Distribusi Confidence</div>
-          <div class="confidence-bar">
-            <div class="conf-seg valid"      id="seg-valid"      style="width:0%"></div>
-            <div class="conf-seg incomplete" id="seg-incomplete" style="width:0%"></div>
-            <div class="conf-seg invalid"    id="seg-invalid"    style="width:0%"></div>
-          </div>
-          <div class="confidence-labels">
-            <span class="conf-item-label" id="conf-valid-label">Valid 0%</span>
-            <span class="conf-item-label" id="conf-incomplete-label">Incomplete 0%</span>
-            <span class="conf-item-label" id="conf-invalid-label">Invalid 0%</span>
+        <!-- MDC + Severity + Lookup badges row -->
+        <div id="badges-row" class="badges-row"></div>
+
+        <!-- Confidence bars: MDC + Severity -->
+        <div class="confidence-bar-wrap" style="margin-top:16px">
+          <div class="confidence-label">Kepercayaan Prediksi</div>
+          <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+            <div style="flex:1;min-width:180px">
+              <div class="conf-sublabel">MDC</div>
+              <div class="confidence-bar" style="height:10px">
+                <div class="conf-seg valid" id="seg-mdc" style="width:0%"></div>
+              </div>
+              <div class="conf-item-label" id="conf-mdc-label" style="margin-top:4px">—</div>
+            </div>
+            <div style="flex:1;min-width:180px">
+              <div class="conf-sublabel">Severity</div>
+              <div class="confidence-bar" style="height:10px">
+                <div class="conf-seg valid" id="seg-sev" style="width:0%"></div>
+              </div>
+              <div class="conf-item-label" id="conf-sev-label" style="margin-top:4px">—</div>
+            </div>
           </div>
         </div>
-      </div><!-- /result card -->
+      </div><!-- /CBG result card -->
 
-      <!-- Financial metrics row -->
+      <!-- Tariff metrics row -->
       <div class="metrics-row">
         <div class="metric-card">
-          <div class="metric-label">Tarif Reimbursement BPJS</div>
+          <div class="metric-label">Tarif Dasar Prediksi (Kelas 3)</div>
           <div class="metric-value idr" id="metric-base-tariff">—</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Tarif untuk Kelas Anda</div>
+          <div class="metric-value idr" id="metric-kelas-tariff">—</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Financial Gap</div>
           <div class="metric-value idr" id="metric-gap">—</div>
         </div>
-        <div class="metric-card">
-          <div class="metric-label">Prob. Reimbursement</div>
-          <div class="metric-value" id="metric-prob">—</div>
-        </div>
       </div>
 
       <!-- SHAP explanation chart -->
       <div class="card chart-card">
-        <div class="card-title">Faktor Penentu Prediksi (SHAP)</div>
+        <div class="card-title">Faktor Penentu Prediksi MDC (SHAP)</div>
         <div class="chart-wrap">
           <canvas id="shap-chart"></canvas>
         </div>
@@ -205,7 +206,7 @@
             <tr>
               <th>Waktu</th>
               <th>ICD-10</th>
-              <th>Prediksi</th>
+              <th>CBG Prediksi</th>
               <th>Risk</th>
               <th>Gap IDR</th>
               <th>Action</th>

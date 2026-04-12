@@ -11,16 +11,32 @@
 
 ## Project Overview
 
-An AI-powered Decision Support System (DSS) for hospital Casemix coders to predict BPJS claim grouping outcomes before submission. Built for Tamtech (a health IT company in Malaysia/Indonesia).
+An AI-powered Decision Support System (DSS) that predicts BPJS INA-CBGs 
+claim grouping outcomes from clinical inputs at the doctor's diagnosis 
+stage — before Casemix coding begins. Built for Tamtech (health IT 
+company serving Indonesian hospitals using Neurovi HIS).
 
-**Core Problem:** Casemix coders manually review ICD-10 diagnosis codes and ICD-9 procedures to determine BPJS grouping. Incorrect coding wastes time and causes rejected claims. This DSS predicts the grouping outcome automatically and explains why.
+**Core Problem:** Doctors write diagnoses and treatment plans without 
+knowing how those decisions will be grouped by the INACBG engine or 
+what tariff BPJS will reimburse. Incorrect ICD combinations only get 
+caught after Casemix coding — causing rejected claims, delayed 
+reimbursement (30–90 days), and revenue loss for the hospital.
+
+**What this DSS does:** Given a doctor's primary diagnosis (ICD-10) and 
+planned procedure (ICD-9), the system predicts:
+1. Which INA-CBGs CBG group the claim will be classified into
+2. The BPJS reimbursement ceiling (base tariff) for that group
+3. Financial risk if the planned charge exceeds the tariff ceiling
+4. Actionable guidance for the Casemix coder before coding starts
 
 **System Architecture:**
 - Backend: Flask REST API (Python)
-- ML: XGBoost + LightGBM + SHAP explainability
+- ML: 2-stage XGBoost surrogate grouper (MDC predictor + severity 
+  predictor) + deterministic CBG lookup table
 - Database: PostgreSQL + SQLAlchemy
-- Frontend: HTML/CSS/JS + Chart.js
-- Data: Real Tamtech hospital data + SDV augmentation
+- Frontend: HTML/CSS/JS + Chart.js clinical dashboard
+- Data: 3,076 real Tamtech hospital claims (Oct–Nov 2025)
+- Integration: Neurovi HIS hook prepared (pending API docs)
 
 ---
 

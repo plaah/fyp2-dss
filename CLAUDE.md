@@ -80,9 +80,47 @@ fyp2-dss/
 **Date range:** Oct–Nov 2025 (33 days)  
 **File:** `data/tamtech_raw_extract.csv`
 
-### Label Definition (ml_label column)
+## Business Logic — Surrogate INACBG Grouper (Option C)
 
-The system uses a DUAL grouping engine (IDRG internal + INACBG official BPJS):
+### Correct Hospital Flow (Doctor-first entry point)
+```
+Nurse assessment
+↓
+Doctor writes diagnosis (ICD-10) + treatment plan (ICD-9 procedure)
+↓ ← DSS PREDICTION ENTERS HERE (before Casemix coding)
+↓
+System predicts: Which CBG group? What tariff? Financial risk?
+↓
+Casemix coder reviews DSS prediction → finalizes ICD coding
+↓
+iDRG internal validation → INACBG official grouper
+↓
+Claim sent to BPJS → reimbursement
+```
+
+### Prediction Targets (what the system outputs)
+| Output | Description | Source |
+|---|---|---|
+| `predicted_mdc` | Major Diagnostic Category (A-Z) | Stage 1 ML |
+| `predicted_severity` | Severity level (0/I/II/III) | Stage 2 ML |
+| `predicted_cbg_code` | INA-CBGs CBG code | Stage 3 lookup |
+| `predicted_base_tariff` | BPJS reimbursement ceiling (IDR) | Stage 3 lookup |
+
+### What the system does NOT predict
+- grouping_valid / coding_incomplete / grouping_invalid
+  (These are OUTPUTS of the INACBG grouper — not inputs)
+- Whether BPJS will approve the claim
+  (That depends on final coding, not prediction)
+
+### Training Data
+- Source: 3,076 approved claims from Tamtech dio_finance
+- Only `ml_label == grouping_valid` used (known correct groupings)
+- Features: clinical inputs only — ICD-10, ICD-9, care_type, kelas, episodes
+- No grouping result fields used (no circular reasoning)
+
+### Label Definition (ml_label column — raw data reference only)
+
+The raw CSV has a DUAL grouping engine label (IDRG internal + INACBG official):
 
 | Label | Meaning | Count | % |
 |---|---|---|---|
@@ -105,33 +143,15 @@ kelas, inacbg_grouping_success, final_success, final_message, final_error_no,
 ml_label
 ```
 
-### Target Dataset: synthetic_bpjs.csv
-
-- **Total:** 10,000 records
-- **Distribution:** 70% grouping_valid / 20% coding_incomplete / 10% grouping_invalid
-- **Method:** Real data + SDV GaussianCopula augmentation per class
-- **Augmentation needed:**
-  - grouping_valid: +3,862 synthetic (seed: 3,138 real)
-  - coding_incomplete: +1,719 synthetic (seed: 281 real)
-  - grouping_invalid: +990 synthetic (seed: 10 real)
+### Clinical Training Dataset (v2 — Surrogate Grouper)
+- File: `data/clinical_training_data.csv`
+- Records: 3,076 (approved claims only, MDC P excluded)
+- Features: icd_chapter, icd_block_freq, is_outpatient, care_type_enc,
+  entry_type_enc, kelas_enc, episodes, mdc_number, icd_match, has_procedure
+- Targets: mdc_letter (Stage 1), severity (Stage 2), cbg_code (lookup)
+- Note: synthetic_bpjs.csv is legacy — no longer used for training
 
 ---
-
-## Business Logic — BPJS Claim Grouping Flow
-
-```
-Patient discharged
-    ↓
-Casemix coder assigns ICD-10 diagnosis + ICD-9 procedure
-    ↓
-iDRG grouping (internal validation) → DRG code + tariff estimate
-    ↓
-INACBG grouping (official BPJS engine) → CBG code + base_tariff + kelas
-    ↓
-Claim submitted to BPJS (kemkes_dc → bpjs_dc)
-    ↓
-Final result: grouping_valid / coding_incomplete / grouping_invalid
-```
 
 **ICD versions used:** ICD-10 version 2010 (WHO) for diagnosis, ICD-9-CM for procedures — standard in BPJS/INA-CBGs Indonesia.
 
@@ -324,13 +344,17 @@ Hooks in place:
 ---
 
 ## Current Session Priorities
+1. `python scripts/surrogate_grouper_status.py` — check all artifacts
+2. `python app.py` — verify Flask starts on port 5000/5001
+3. `python -m pytest tests/ -q` — all 91 tests must pass
+4. Check CLAUDE.md section "ML Architecture" for current model metrics
 
-When Claude Code starts a new session, check this list:
-
-1. Is `data/tamtech_raw_extract.csv` present? → Validate with pandas
-2. Is `data/synthetic_bpjs.csv` present? → If not, run augmentation
-3. Is `app.py` runnable? → `python app.py` should start Flask on port 5000
-4. What's the current sprint task? → Check Sprint Plan above
+## Slim Context Rules (save tokens)
+- Read ONLY the section you need, not the whole file
+- Model metrics → read "ML Architecture" section only
+- API inputs/outputs → read "API Endpoints" section only
+- DB schema → read "Database Schema" section only
+- Sprint status → read "Sprint Plan" section only
 
 ---
 

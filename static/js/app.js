@@ -54,6 +54,10 @@ let _allPredictions  = [];   // cache for paginated table
 let _currentPage     = 1;
 const PAGE_SIZE      = 20;
 
+/* ── ICD search debounce timers ────────────────────────────────────────────── */
+let _diagTimer = null;
+let _procTimer = null;
+
 /* ══════════════════════════════════════════════════════════════════════════
    UTILITY FUNCTIONS
    ══════════════════════════════════════════════════════════════════════════ */
@@ -132,46 +136,141 @@ async function checkApiStatus() {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   ICD SEARCH — pill-based suggestion (replaces IcdSearchWidget)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Fetch ICD search results and render as clickable pills.
+ * @param {string} query         Search term (min 2 chars)
+ * @param {string} type          'diagnosis' | 'procedure'
+ * @param {string} pillsId       ID of the pills container div
+ * @param {string} hiddenId      ID of the hidden input to store selected code
+ * @param {Function|null} onSelect  Optional callback(item) after selection
+ */
+async function _fetchPills(query, type, pillsId, hiddenId, onSelect) {
+  if (query.length < 2) {
+    const c = document.getElementById(pillsId);
+    if (c) c.innerHTML = '';
+    return;
+  }
+  try {
+    const res  = await fetch(`${API_BASE}/icd-search?q=${encodeURIComponent(query)}&type=${type}&limit=3`);
+    const data = await res.json();
+    _renderPills(data.results || [], pillsId, hiddenId, onSelect);
+  } catch (err) {
+    console.error('ICD search error:', err);
+  }
+}
+
+/**
+ * Render clickable suggestion pills into a container.
+ * @param {Array}    results    Array of {code, description, indonesian_term, source, confidence}
+ * @param {string}   containerId
+ * @param {string}   hiddenId   Hidden input to store the selected code
+ * @param {Function|null} onSelect  Optional callback(item)
+ */
+function _renderPills(results, containerId, hiddenId, onSelect) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = '';
+  if (!results.length) return;
+
+  results.forEach(item => {
+    const pill  = document.createElement('button');
+    pill.type   = 'button';
+    pill.className = 'icd-pill';
+    const label = item.indonesian_term || item.description || item.code;
+    const extra = (item.indonesian_term && item.description && item.indonesian_term !== item.description)
+      ? ` <span class="icd-pill-desc">${item.description}</span>` : '';
+    pill.innerHTML = `<strong>${item.code}</strong> ${label}${extra}`;
+
+    pill.addEventListener('click', () => {
+      // Deselect siblings, select this
+      container.querySelectorAll('.icd-pill').forEach(p => p.classList.remove('selected'));
+      pill.classList.add('selected');
+      const hidden = document.getElementById(hiddenId);
+      if (hidden) hidden.value = item.code;
+      if (onSelect) onSelect(item);
+    });
+    container.appendChild(pill);
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    PREDICTION PAGE — submitPrediction()
    ══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * Read form values, POST to /api/v1/full-assessment, render results.
+ * Read form values, resolve ICD codes, POST to /api/v1/full-assessment, render results.
+ * If the user hasn't clicked a pill, auto-resolves via API (first result).
+ * If no API result, uses the raw text as-is.
  */
 async function submitPrediction() {
   const btn   = document.getElementById('submit-btn');
   const alert = document.getElementById('error-alert');
-
   if (alert) { alert.className = 'alert'; alert.textContent = ''; }
 
-  // Clinical-only payload — no grouping result fields needed
-  const primaryIcd = _val('primary_icd10').toUpperCase();
-  const inacbgIcd  = (_val('inacbg_icd10') || primaryIcd).toUpperCase();
+  // ── Resolve diagnosis ICD-10 ──────────────────────────────────────────
+  let primaryIcd = (document.getElementById('primary_icd10') || {}).value.trim().toUpperCase();
+  const diagText = ((document.getElementById('diag-input') || {}).value || '').trim();
 
-  const body = {
-    primary_icd10:  primaryIcd,
-    inacbg_icd10:   inacbgIcd,
-    icd9_procedure: _val('icd9_procedure') || null,
-    care_type:      _val('care_type'),
-    entry_type:     _val('entry_type'),
-    kelas:          _val('kelas'),
-    episodes:       parseInt(_val('episodes')) || 1,
-    actual_tariff:  parseFloat(_val('actual_tariff')) || 0,
-  };
+  if (!primaryIcd && diagText.length >= 2) {
+    try {
+      const res  = await fetch(`${API_BASE}/icd-search?q=${encodeURIComponent(diagText)}&type=diagnosis&limit=3`);
+      const data = await res.json();
+      const results = data.results || [];
+      if (results.length > 0) {
+        primaryIcd = results[0].code;
+        // Show pills and auto-select first
+        _renderPills(results, 'diag-pills', 'primary_icd10', null);
+        const firstPill = document.getElementById('diag-pills').querySelector('.icd-pill');
+        if (firstPill) firstPill.classList.add('selected');
+      } else {
+        primaryIcd = diagText;  // fallback: use raw text
+      }
+    } catch (e) {
+      primaryIcd = diagText;
+    }
+  }
 
-  // Validate required
-  if (!body.primary_icd10) {
-    _showAlert(alert, 'Pilih diagnosis utama terlebih dahulu (ketik dan pilih dari dropdown).');
-    const diagInput = document.getElementById('diagnosis_search');
+  if (!primaryIcd) {
+    _showAlert(alert, 'Ketik nama penyakit atau kode ICD-10 di kolom Diagnosis Utama.');
+    const diagInput = document.getElementById('diag-input');
     if (diagInput) diagInput.focus();
     return;
   }
 
-  // Loading state
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Memprediksi…';
+  // ── Resolve procedure ICD-9 ───────────────────────────────────────────
+  let procCode = (document.getElementById('icd9_procedure') || {}).value.trim();
+  const procText = ((document.getElementById('proc-input') || {}).value || '').trim();
+
+  if (!procCode && procText.length >= 2) {
+    try {
+      const res  = await fetch(`${API_BASE}/icd-search?q=${encodeURIComponent(procText)}&type=procedure&limit=1`);
+      const data = await res.json();
+      if ((data.results || []).length > 0) {
+        procCode = data.results[0].code;
+      }
+    } catch (e) { /* ignore */ }
   }
+
+  const kelas    = (document.getElementById('kelas') || {}).value    || 'kelas_3';
+  const careType = (document.getElementById('care_type') || {}).value || 'outp';
+  const actualTariff = parseFloat((document.getElementById('actual_tariff') || {}).value) || 0;
+
+  const body = {
+    primary_icd10:  primaryIcd,
+    inacbg_icd10:   primaryIcd,
+    icd9_procedure: procCode || null,
+    care_type:      careType,
+    entry_type:     careType,
+    kelas:          kelas,
+    episodes:       1,
+    actual_tariff:  actualTariff,
+  };
+
+  // Loading state
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Memprediksi…'; }
 
   try {
     const resp = await fetch(`${API_BASE}/full-assessment`, {
@@ -180,181 +279,130 @@ async function submitPrediction() {
       body:    JSON.stringify(body),
     });
     const data = await resp.json();
-
     if (!resp.ok || data.status !== 'success') {
       throw new Error(data.message || `HTTP ${resp.status}`);
     }
-
-    _renderResult(data);
+    _renderResult(data, primaryIcd, procCode, actualTariff, kelas);
     _loadRecentPredictions();
-
   } catch (err) {
     _showAlert(alert, `Gagal memproses prediksi: ${err.message}`);
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = '🔮 Prediksi CBG & Tarif';
-    }
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔮 Prediksi CBG & Tarif'; }
   }
 }
 
 /**
- * Render the full-assessment API response (surrogate grouper format).
- * @param {Object} data  API response from /full-assessment
+ * Render the full-assessment API response into the result card.
+ * Uses exact field names from SurrogateGrouper + FinancialEstimator + RecommendationEngine.
+ *
+ * prediction fields used:
+ *   predicted_cbg_code, predicted_cbg_description,
+ *   predicted_mdc, predicted_mdc_description,
+ *   predicted_severity, predicted_severity_label,
+ *   predicted_base_tariff, tariff_by_kelas
+ *
+ * financial fields used:
+ *   reimbursement_amount  (kelas-adjusted BPJS ceiling),
+ *   financial_gap, risk_level
+ *
+ * recommendation fields used:
+ *   primary_action, summary
+ *
+ * @param {Object} data         Full /full-assessment response
+ * @param {string} icd10Code    Resolved ICD-10 code
+ * @param {string} icd9Code     Resolved ICD-9 code (may be empty)
+ * @param {number} actualTariff User-submitted tariff (0 if not provided)
+ * @param {string} kelas        Selected ward class
  */
-function _renderResult(data) {
-  const section = document.getElementById('result-section');
-  if (!section) return;
+function _renderResult(data, icd10Code, icd9Code, actualTariff, kelas) {
+  const card = document.getElementById('result-card');
+  if (!card) return;
 
-  const pred = data.prediction   || {};
-  const fin  = data.financial    || {};
+  const pred = data.prediction     || {};
+  const fin  = data.financial      || {};
   const rec  = data.recommendation || {};
 
-  const cbgCode     = pred.predicted_cbg_code        || '—';
-  const cbgDesc     = pred.predicted_cbg_description || '';
-  const mdc         = pred.predicted_mdc             || '?';
-  const mdcDesc     = pred.predicted_mdc_description || '';
-  const severity    = pred.predicted_severity        || '?';
-  const sevLabel    = pred.predicted_severity_label  || '';
-  const mdcConf     = Math.round((pred.mdc_confidence     || 0) * 100);
-  const sevConf     = Math.round((pred.severity_confidence || 0) * 100);
-  const lookupMethod = pred.lookup_method            || 'none';
-  const tariffByKelas = pred.tariff_by_kelas         || {};
-  const kelas       = document.getElementById('kelas') ? document.getElementById('kelas').value : 'kelas_3';
-  const shap        = pred.shap_explanation          || [];
+  // ── Selected ICD codes row ──────────────────────────────────────────
+  const codesRow = document.getElementById('res-codes-row');
+  if (codesRow) {
+    codesRow.innerHTML =
+      `<span class="badge-pill badge-mdc">ICD-10: ${icd10Code}</span>` +
+      (icd9Code ? `<span class="badge-pill" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd">ICD-9: ${icd9Code}</span>` : '');
+  }
 
-  // ── CBG headline ───────────────────────────────────────────
+  // ── CBG headline ──────────────────────────────────────────────────
   const headlineEl = document.getElementById('cbg-headline');
   if (headlineEl) {
     headlineEl.innerHTML = `
-      <div class="cbg-code-large">${cbgCode}</div>
-      <div class="cbg-desc-text">${cbgDesc}</div>
+      <div class="cbg-code-large">${pred.predicted_cbg_code || '—'}</div>
+      <div class="cbg-desc-text">${pred.predicted_cbg_description || ''}</div>
     `;
   }
 
-  // ── MDC + Severity + Lookup badges ─────────────────────────
+  // ── MDC + Severity badges ─────────────────────────────────────────
   const badgesEl = document.getElementById('badges-row');
   if (badgesEl) {
-    let lookupBadge;
-    if (lookupMethod === 'exact') {
-      lookupBadge = `<span class="badge-pill badge-exact">✓ Exact Match</span>`;
-    } else if (lookupMethod === 'none') {
-      lookupBadge = `<span class="badge-pill badge-none">⚠ Tidak Ditemukan</span>`;
-    } else {
-      lookupBadge = `<span class="badge-pill badge-approx">~ Aproximasi</span>`;
-    }
+    const mdc    = pred.predicted_mdc             || '?';
+    const mdcD   = pred.predicted_mdc_description || '';
+    const sev    = pred.predicted_severity        || '?';
+    const sevL   = pred.predicted_severity_label  || '';
+    const mdcPct = Math.round((pred.mdc_confidence      || 0) * 100);
+    const sevPct = Math.round((pred.severity_confidence || 0) * 100);
+    const lookup = pred.lookup_method || 'none';
+    const lookupBadge = lookup === 'exact'
+      ? `<span class="badge-pill badge-exact">✓ Exact Match</span>`
+      : lookup === 'none'
+        ? `<span class="badge-pill badge-none">⚠ CBG Tidak Ditemukan</span>`
+        : `<span class="badge-pill badge-approx">~ Aproximasi (${lookup})</span>`;
     badgesEl.innerHTML = `
-      <span class="badge-pill badge-mdc">MDC ${mdc} — ${mdcDesc}</span>
-      <span class="badge-pill badge-sev">Severity ${severity} — ${sevLabel}</span>
+      <span class="badge-pill badge-mdc">MDC ${mdc} — ${mdcD} (${mdcPct}%)</span>
+      <span class="badge-pill badge-sev">Severity ${sev} — ${sevL} (${sevPct}%)</span>
       ${lookupBadge}
     `;
   }
 
-  // ── Confidence bars ────────────────────────────────────────
-  _setWidth('seg-mdc', mdcConf + '%');
-  _setText('conf-mdc-label', `MDC: ${mdcConf}% kepercayaan`);
-  _setWidth('seg-sev', sevConf + '%');
-  _setText('conf-sev-label', `Severity: ${sevConf}% kepercayaan`);
+  // ── Tariff metrics ─────────────────────────────────────────────────
+  // predicted_base_tariff = always kelas_3 rate
+  const baseTariff  = pred.predicted_base_tariff || 0;
+  // reimbursement_amount = kelas-adjusted BPJS ceiling (from FinancialEstimator)
+  const kelasCeiling = fin.reimbursement_amount || (pred.tariff_by_kelas || {})[kelas] || baseTariff;
 
-  // ── Tariff metrics ─────────────────────────────────────────
-  _setText('metric-base-tariff', formatIDR(pred.predicted_base_tariff || 0));
-  _setText('metric-kelas-tariff', formatIDR(tariffByKelas[kelas] || pred.predicted_base_tariff || 0));
-  _setHTML('metric-gap',
-    formatIDR(fin.financial_gap || 0) +
-    `<div class="mt-4">${getRiskBadgeHTML(fin.risk_level)}</div>`
-  );
+  _setText('res-base-tariff',  formatIDR(baseTariff));
+  _setText('res-kelas-tariff', formatIDR(kelasCeiling));
 
-  // ── SHAP chart ─────────────────────────────────────────────
-  _renderShapChart(shap);
-
-  // ── Recommendation box ─────────────────────────────────────
-  const recBox = document.getElementById('rec-box');
-  if (recBox) {
-    const action = rec.primary_action || 'REVIEW';
-    // Color recommendation box by confidence: green=high, amber=medium, red=low/none
-    let recCls = 'valid';
-    if (lookupMethod === 'none' || mdcConf < 60)       recCls = 'invalid';
-    else if (mdcConf < 80 || lookupMethod !== 'exact')  recCls = 'incomplete';
-
-    recBox.className = `recommendation-box ${recCls}`;
-
-    const recs = (rec.recommendations || []).slice(0, 4);
-    const tips = rec.coding_tips || [];
-
-    const recsHtml = recs.map(r =>
-      `<li><strong>${r.action}</strong> — <span class="text-muted">${r.reason}</span></li>`
-    ).join('');
-
-    const tipsHtml = tips.length ? `
-      <div class="coding-tips">
-        <div class="coding-tips-title">💡 Coding Tips</div>
-        ${tips.map(t => `<div class="coding-tip-item">• ${t}</div>`).join('')}
-      </div>` : '';
-
-    recBox.innerHTML = `
-      <span class="rec-action-badge ${action}">${action.replace(/_/g, ' ')}</span>
-      <div class="rec-summary">${rec.summary || ''}</div>
-      <ul class="rec-list">${recsHtml}</ul>
-      ${tipsHtml}
-      <div class="rec-resolution">⏱ Estimasi resolusi: <strong>${rec.estimated_resolution_days || 14} hari kerja</strong></div>
-    `;
+  // ── Tariff status (vs user-submitted tariff) ───────────────────────
+  const statusEl = document.getElementById('res-tariff-status');
+  if (statusEl) {
+    if (actualTariff > 0) {
+      const gap = actualTariff - kelasCeiling;
+      if (gap > 0) {
+        statusEl.innerHTML = `<span style="color:#ef4444;font-weight:600">⚠️ MELEBIHI PLAFON</span>
+          <div style="font-size:13px;color:#ef4444;margin-top:4px">Selisih: ${formatIDR(gap)}</div>`;
+      } else {
+        statusEl.innerHTML = `<span style="color:#22c55e;font-weight:600">✅ AMAN</span>
+          <div style="font-size:13px;color:#22c55e;margin-top:4px">Dalam plafon BPJS</div>`;
+      }
+    } else {
+      statusEl.innerHTML = `<span style="color:var(--color-text-muted);font-size:13px">Tarif tidak diisi</span>`;
+    }
   }
 
-  section.className = 'visible';
-  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
+  // ── Risk badge ────────────────────────────────────────────────────
+  _setHTML('res-risk', getRiskBadgeHTML(fin.risk_level));
 
-/**
- * Render horizontal SHAP bar chart for top-3 features.
- * @param {Array} explanation  Array of {feature, impact, direction} objects
- */
-function _renderShapChart(explanation) {
-  const canvas = document.getElementById('shap-chart');
-  if (!canvas || !explanation.length) return;
+  // ── Primary action badge ──────────────────────────────────────────
+  const actionEl = document.getElementById('res-action');
+  if (actionEl && rec.primary_action) {
+    actionEl.innerHTML =
+      `<span class="rec-action-badge ${rec.primary_action}">${rec.primary_action.replace(/_/g, ' ')}</span>`;
+  }
 
-  const labels  = explanation.map(e => e.feature.replace(/_/g, ' '));
-  const impacts = explanation.map(e => e.impact);
-  const colors  = explanation.map(e =>
-    e.direction === 'positive' ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.8)'
-  );
+  // ── Recommendation summary ────────────────────────────────────────
+  _setText('res-summary', rec.summary || '');
 
-  if (_shapChart) { _shapChart.destroy(); _shapChart = null; }
-
-  _shapChart = new Chart(canvas.getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        data: impacts,
-        backgroundColor: colors,
-        borderRadius: 4,
-        borderSkipped: false,
-      }],
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => ` Impact: ${ctx.raw.toFixed(4)}`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(0,0,0,0.05)' },
-          ticks: { font: { size: 11 } },
-        },
-        y: {
-          grid: { display: false },
-          ticks: { font: { size: 11 } },
-        },
-      },
-    },
-  });
+  // ── Show card ─────────────────────────────────────────────────────
+  card.classList.remove('hidden');
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -705,14 +753,10 @@ function exportCSV() {
 
 /**
  * Placeholder for future Neurovi HIS integration.
- * When Neurovi API docs are available, this function will fetch encounter
- * data and auto-populate the prediction form fields.
- *
  * @param {string} encounterId  Neurovi encounter / visit ID
  */
 async function fetchFromNeurovi(encounterId) {
   // TODO: Connect to Neurovi HIS when API docs available
-  // Will auto-populate form fields from real encounter data
   console.log('Neurovi integration pending:', encounterId);
 }
 
@@ -722,7 +766,6 @@ async function fetchFromNeurovi(encounterId) {
 
 /**
  * Initialise all Chart.js instances on the dashboard page.
- * Safe to call multiple times — existing charts are destroyed first.
  */
 function initCharts() {
   loadStats();
@@ -760,196 +803,56 @@ function _showAlert(el, msg) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   PAGE INIT — called from each page's DOMContentLoaded
+   PAGE INIT
    ══════════════════════════════════════════════════════════════════════════ */
-
-/* ══════════════════════════════════════════════════════════════════════════
-   ICD SEARCH WIDGET — Sprint 6 / T6.3
-   Search-as-you-type ICD code selector (Tier 1 Indonesian + Tier 2 English
-   + Tier 3 code prefix). Debounced 300ms fetch to /api/v1/icd-search.
-   ══════════════════════════════════════════════════════════════════════════ */
-
-class IcdSearchWidget {
-  /**
-   * @param {object} config
-   *   inputId    — visible text input id
-   *   hiddenId   — hidden input that stores the selected ICD code
-   *   badgeId    — span that shows the selected code as a pill badge
-   *   dropdownId — div container for the dropdown list
-   *   type       — 'diagnosis' | 'procedure'
-   *   placeholder
-   *   onSelect   — optional callback(code, item)
-   */
-  constructor(config) {
-    this.cfg          = config;
-    this.debounceTimer = null;
-    this.activeIndex  = -1;
-    this.results      = [];
-
-    this.input    = document.getElementById(config.inputId);
-    this.hidden   = document.getElementById(config.hiddenId);
-    this.badge    = document.getElementById(config.badgeId);
-    this.dropdown = document.getElementById(config.dropdownId);
-
-    if (!this.input) return;
-
-    if (config.placeholder) {
-      this.input.placeholder = config.placeholder;
-    }
-    this._bindEvents();
-  }
-
-  _bindEvents() {
-    this.input.addEventListener('input', () => {
-      clearTimeout(this.debounceTimer);
-      const q = this.input.value.trim();
-      if (q.length < 2) { this._close(); return; }
-      this.debounceTimer = setTimeout(() => this._search(q), 300);
-    });
-
-    this.input.addEventListener('keydown', (e) => {
-      if (!this.results.length) return;
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        this.activeIndex = Math.min(this.activeIndex + 1, this.results.length - 1);
-        this._highlight();
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        this.activeIndex = Math.max(this.activeIndex - 1, -1);
-        this._highlight();
-      } else if (e.key === 'Enter' && this.activeIndex >= 0) {
-        e.preventDefault();
-        this._select(this.results[this.activeIndex]);
-      } else if (e.key === 'Escape') {
-        this._close();
-      }
-    });
-
-    document.addEventListener('click', (e) => {
-      if (this.input && !this.input.contains(e.target) &&
-          this.dropdown && !this.dropdown.contains(e.target)) {
-        this._close();
-      }
-    });
-  }
-
-  async _search(q) {
-    try {
-      const type = this.cfg.type || 'diagnosis';
-      const res  = await fetch(
-        `${API_BASE}/icd-search?q=${encodeURIComponent(q)}&type=${type}&limit=6`
-      );
-      const data = await res.json();
-      this.results     = data.results || [];
-      this.activeIndex = -1;
-      this._render();
-    } catch (err) {
-      console.error('ICD search error:', err);
-    }
-  }
-
-  _render() {
-    this.dropdown.innerHTML = '';
-    if (!this.results.length) { this._close(); return; }
-    this.results.forEach((item, i) => {
-      const div = document.createElement('div');
-      div.className    = 'icd-dropdown-item';
-      div.dataset.index = i;
-      const label = item.indonesian_term || item.description || item.code;
-      const desc  = item.indonesian_term && item.description ? item.description : '';
-      div.innerHTML = `
-        <span class="icd-code">${item.code}</span>
-        <span>${label}</span>
-        ${desc ? `<span class="icd-desc">${desc}</span>` : ''}
-      `;
-      div.addEventListener('click', () => this._select(item));
-      this.dropdown.appendChild(div);
-    });
-    this.dropdown.classList.remove('hidden');
-  }
-
-  _select(item) {
-    this.hidden.value = item.code;
-    this.input.value  = item.indonesian_term || item.description || item.code;
-    if (this.badge) {
-      this.badge.textContent = item.code;
-      this.badge.classList.remove('hidden');
-    }
-    this._close();
-    if (this.cfg.onSelect) this.cfg.onSelect(item.code, item);
-  }
-
-  _highlight() {
-    this.dropdown.querySelectorAll('.icd-dropdown-item').forEach((el, i) => {
-      el.classList.toggle('active', i === this.activeIndex);
-    });
-  }
-
-  _close() {
-    if (this.dropdown) this.dropdown.classList.add('hidden');
-    this.results     = [];
-    this.activeIndex = -1;
-  }
-
-  clear() {
-    if (this.hidden) this.hidden.value = '';
-    if (this.input)  this.input.value  = '';
-    if (this.badge)  this.badge.classList.add('hidden');
-    this._close();
-  }
-
-  getValue() { return this.hidden ? this.hidden.value : ''; }
-}
-
-/* ── Widget instances (global so HTML onclick="diagnosisWidget.clear()" works) */
-let diagnosisWidget, inacbgWidget, procedureWidget;
 
 document.addEventListener('DOMContentLoaded', () => {
   checkApiStatus();
 
-  // Prediction page
   const submitBtn = document.getElementById('submit-btn');
   if (submitBtn) {
+    // Prediction page
     submitBtn.addEventListener('click', submitPrediction);
     _loadRecentPredictions();
 
-    // Initialise ICD search widgets (prediction page only)
-    diagnosisWidget = new IcdSearchWidget({
-      inputId:    'diagnosis_search',
-      hiddenId:   'primary_icd10',
-      badgeId:    'diagnosis_badge',
-      dropdownId: 'diagnosis_dropdown',
-      type:       'diagnosis',
-      placeholder: 'Ketik nama penyakit... (hipertensi, pneumonia...)',
-      onSelect: (code, item) => {
-        // Auto-sync INACBG field with same code if not already set
-        if (inacbgWidget && !inacbgWidget.getValue()) {
-          document.getElementById('inacbg_icd10').value = code;
-          document.getElementById('inacbg_search').value =
-            item.indonesian_term || item.description || code;
-          document.getElementById('inacbg_badge').textContent = code;
-          document.getElementById('inacbg_badge').classList.remove('hidden');
+    // Wire up diagnosis search → pills
+    const diagInput = document.getElementById('diag-input');
+    if (diagInput) {
+      diagInput.addEventListener('input', () => {
+        // Clear selected code when user types new text
+        const hidden = document.getElementById('primary_icd10');
+        if (hidden) hidden.value = '';
+        clearTimeout(_diagTimer);
+        const q = diagInput.value.trim();
+        if (q.length < 2) {
+          const pills = document.getElementById('diag-pills');
+          if (pills) pills.innerHTML = '';
+          return;
         }
-      },
-    });
+        _diagTimer = setTimeout(() => {
+          _fetchPills(q, 'diagnosis', 'diag-pills', 'primary_icd10', null);
+        }, 350);
+      });
+    }
 
-    inacbgWidget = new IcdSearchWidget({
-      inputId:    'inacbg_search',
-      hiddenId:   'inacbg_icd10',
-      badgeId:    'inacbg_badge',
-      dropdownId: 'inacbg_dropdown',
-      type:       'diagnosis',
-      placeholder: 'Sama dengan diagnosis utama (opsional)',
-    });
-
-    procedureWidget = new IcdSearchWidget({
-      inputId:    'procedure_search',
-      hiddenId:   'icd9_procedure',
-      badgeId:    'procedure_badge',
-      dropdownId: 'procedure_dropdown',
-      type:       'procedure',
-      placeholder: 'Ketik tindakan... (nebulisasi, infus, operasi...)',
-    });
+    // Wire up procedure search → pills
+    const procInput = document.getElementById('proc-input');
+    if (procInput) {
+      procInput.addEventListener('input', () => {
+        const hidden = document.getElementById('icd9_procedure');
+        if (hidden) hidden.value = '';
+        clearTimeout(_procTimer);
+        const q = procInput.value.trim();
+        if (q.length < 2) {
+          const pills = document.getElementById('proc-pills');
+          if (pills) pills.innerHTML = '';
+          return;
+        }
+        _procTimer = setTimeout(() => {
+          _fetchPills(q, 'procedure', 'proc-pills', 'icd9_procedure', null);
+        }, 350);
+      });
+    }
   }
 
   // Dashboard page

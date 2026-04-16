@@ -924,3 +924,72 @@ tbody tr.row-invalid    { border-left: 3px solid var(--color-invalid); }
     line-height: 1;
 }
 .icd-clear-btn:hover { color: #ef4444; }
+
+/* ── ICD Suggestion Pills (Sprint 7) ─────────────────────────────────────── */
+.icd-pills-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+    min-height: 0;
+}
+
+.icd-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1.5px solid var(--color-border);
+    border-radius: 20px;
+    background: var(--color-bg);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--color-text);
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+    text-align: left;
+    max-width: 100%;
+    font-family: inherit;
+}
+
+.icd-pill:hover {
+    border-color: var(--color-primary);
+    background: var(--color-primary-bg);
+    color: var(--color-primary-dark);
+}
+
+.icd-pill.selected {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #fff;
+}
+
+.icd-pill strong {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    background: rgba(0,0,0,0.08);
+    padding: 1px 5px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.icd-pill.selected strong {
+    background: rgba(255,255,255,0.25);
+}
+
+.icd-pill-desc {
+    color: var(--color-text-muted);
+    font-size: 11px;
+    margin-left: 2px;
+}
+
+.icd-pill.selected .icd-pill-desc {
+    color: rgba(255,255,255,0.8);
+}
+
+/* Result codes row */
+.result-codes-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}

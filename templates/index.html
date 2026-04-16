@@ -49,63 +49,39 @@
   <!-- ═══ MAIN CONTENT ═════════════════════════════════════════════════ -->
   <main class="main">
     <div class="page-header">
-      <h1 class="page-title">Input Klinis Dokter</h1>
-      <p class="page-subtitle">Masukkan diagnosis dan rencana tatalaksana pasien untuk mendapatkan prediksi CBG dan estimasi tarif BPJS.</p>
+      <h1 class="page-title">Tes Prediksi CBG</h1>
+      <p class="page-subtitle">Ketik diagnosis dalam Bahasa Indonesia → pilih saran kode ICD → dapatkan prediksi CBG, tarif, dan status plafon BPJS.</p>
     </div>
 
     <!-- Error Alert -->
     <div id="error-alert" class="alert"></div>
 
-    <!-- ── Section 1: Clinical Input Form ─────────────────────────────── -->
+    <!-- ── Input Form ────────────────────────────────────────────────── -->
     <div class="card">
-      <div class="card-title">Data Klinis Pasien</div>
+      <div class="card-title">Input Klinis</div>
 
-      <div class="form-grid">
-        <!-- Row 1: ICD-10 diagnosis codes — search-as-you-type -->
-        <div class="form-group">
-          <label for="diagnosis_search">Diagnosis Utama <span class="required">*</span></label>
-          <div class="icd-search-wrapper">
-            <input type="text" id="diagnosis_search" class="icd-input"
-                   autocomplete="off"
-                   placeholder="Ketik nama penyakit... (hipertensi, pneumonia...)">
-            <button type="button" class="icd-clear-btn"
-                    onclick="diagnosisWidget && diagnosisWidget.clear()">×</button>
-          </div>
-          <div id="diagnosis_dropdown" class="icd-dropdown hidden"></div>
-          <input type="hidden" id="primary_icd10" name="primary_icd10">
-          <span id="diagnosis_badge" class="icd-selected-badge hidden"></span>
-          <div class="form-hint">Ketik nama penyakit atau kode ICD-10</div>
-        </div>
-        <div class="form-group">
-          <label for="inacbg_search">Diagnosis INACBG</label>
-          <div class="icd-search-wrapper">
-            <input type="text" id="inacbg_search" class="icd-input"
-                   autocomplete="off"
-                   placeholder="Sama dengan diagnosis utama (opsional)">
-            <button type="button" class="icd-clear-btn"
-                    onclick="inacbgWidget && inacbgWidget.clear()">×</button>
-          </div>
-          <div id="inacbg_dropdown" class="icd-dropdown hidden"></div>
-          <input type="hidden" id="inacbg_icd10" name="inacbg_icd10">
-          <span id="inacbg_badge" class="icd-selected-badge hidden"></span>
-          <div class="form-hint">Biasanya sama dengan diagnosis utama</div>
-        </div>
+      <!-- Diagnosis -->
+      <div class="form-group">
+        <label for="diag-input">Diagnosis Utama <span class="required">*</span></label>
+        <input type="text" id="diag-input" autocomplete="off"
+               placeholder="Ketik nama penyakit... (hipertensi, pneumonia, diabetes...)">
+        <div id="diag-pills" class="icd-pills-row"></div>
+        <input type="hidden" id="primary_icd10">
+        <div class="form-hint">Pilih dari saran di bawah, atau ketik kode ICD-10 langsung (cth. I10)</div>
+      </div>
 
-        <!-- Row 2: Procedure + Care Type -->
-        <div class="form-group">
-          <label for="procedure_search">Rencana Tindakan (opsional)</label>
-          <div class="icd-search-wrapper">
-            <input type="text" id="procedure_search" class="icd-input"
-                   autocomplete="off"
-                   placeholder="Ketik tindakan... (nebulisasi, infus, operasi...)">
-            <button type="button" class="icd-clear-btn"
-                    onclick="procedureWidget && procedureWidget.clear()">×</button>
-          </div>
-          <div id="procedure_dropdown" class="icd-dropdown hidden"></div>
-          <input type="hidden" id="icd9_procedure" name="icd9_procedure">
-          <span id="procedure_badge" class="icd-selected-badge hidden"></span>
-          <div class="form-hint">Ketik nama tindakan atau kode ICD-9</div>
-        </div>
+      <!-- Procedure -->
+      <div class="form-group" style="margin-top:20px">
+        <label for="proc-input">Rencana Tindakan <span style="color:var(--color-text-muted);font-weight:400">(opsional)</span></label>
+        <input type="text" id="proc-input" autocomplete="off"
+               placeholder="Ketik tindakan... (nebulisasi, infus, operasi...)">
+        <div id="proc-pills" class="icd-pills-row"></div>
+        <input type="hidden" id="icd9_procedure">
+        <div class="form-hint">Kosongkan jika tidak ada tindakan</div>
+      </div>
+
+      <!-- Care type + Kelas (2-col) -->
+      <div class="form-grid" style="margin-top:20px">
         <div class="form-group">
           <label for="care_type">Jenis Pelayanan</label>
           <select id="care_type">
@@ -113,18 +89,6 @@
             <option value="inp">Rawat Inap</option>
             <option value="emd">IGD / Darurat</option>
             <option value="gp">Poli Umum</option>
-          </select>
-        </div>
-
-        <!-- Row 3: Entry Type + Kelas -->
-        <div class="form-group">
-          <label for="entry_type">Tipe Masuk</label>
-          <select id="entry_type">
-            <option value="gp">Poli Umum</option>
-            <option value="outp">Rawat Jalan</option>
-            <option value="emd">IGD / Darurat</option>
-            <option value="inp">Rawat Inap Elektif</option>
-            <option value="other">Lainnya</option>
           </select>
         </div>
         <div class="form-group">
@@ -135,91 +99,62 @@
             <option value="kelas_1">Kelas 1 (Tarif × 1.50)</option>
           </select>
         </div>
+      </div>
 
-        <!-- Row 4: Episodes + Actual Tariff -->
-        <div class="form-group">
-          <label for="episodes">Jumlah Episode</label>
-          <input type="number" id="episodes" value="1" min="1" max="10">
-        </div>
-        <div class="form-group">
-          <label for="actual_tariff">Tarif yang Akan Diajukan (Rp)</label>
-          <input type="number" id="actual_tariff" placeholder="cth. 196100" min="0">
-          <div class="form-hint">Tarif dasar akan diprediksi otomatis oleh sistem</div>
-        </div>
-      </div><!-- /form-grid -->
+      <!-- Actual tariff -->
+      <div class="form-group" style="margin-top:8px">
+        <label for="actual_tariff">Tarif yang Akan Diajukan (Rp) <span style="color:var(--color-text-muted);font-weight:400">(opsional)</span></label>
+        <input type="number" id="actual_tariff" placeholder="cth. 250000" min="0">
+        <div class="form-hint">Jika diisi, sistem akan menunjukkan apakah melebihi plafon BPJS atau tidak</div>
+      </div>
 
-      <button class="btn btn-primary" id="submit-btn" type="button">
+      <button class="btn btn-primary" id="submit-btn" type="button" style="margin-top:20px">
         🔮 Prediksi CBG & Tarif
       </button>
       <p class="btn-hint">Hasil prediksi akan muncul dalam &lt; 1 detik</p>
-    </div><!-- /input card -->
+    </div>
 
-    <!-- ── Section 2: Result ─────────────────────────────────────────── -->
-    <div id="result-section">
+    <!-- ── Result Card ───────────────────────────────────────────────── -->
+    <div id="result-card" class="card hidden" style="margin-top:24px">
+      <div class="card-title">Hasil Prediksi Surrogate Grouper</div>
 
-      <!-- CBG Prediction Result (main card) -->
-      <div class="card">
-        <div class="card-title">Hasil Prediksi Surrogate Grouper</div>
+      <!-- Selected ICD codes -->
+      <div id="res-codes-row" class="result-codes-row"></div>
 
-        <!-- CBG code headline -->
-        <div id="cbg-headline" class="cbg-headline"></div>
+      <!-- CBG code headline -->
+      <div id="cbg-headline" class="cbg-headline" style="margin:20px 0 12px"></div>
 
-        <!-- MDC + Severity + Lookup badges row -->
-        <div id="badges-row" class="badges-row"></div>
+      <!-- MDC + severity badges -->
+      <div id="badges-row" class="badges-row"></div>
 
-        <!-- Confidence bars: MDC + Severity -->
-        <div class="confidence-bar-wrap" style="margin-top:16px">
-          <div class="confidence-label">Kepercayaan Prediksi</div>
-          <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
-            <div style="flex:1;min-width:180px">
-              <div class="conf-sublabel">MDC</div>
-              <div class="confidence-bar" style="height:10px">
-                <div class="conf-seg valid" id="seg-mdc" style="width:0%"></div>
-              </div>
-              <div class="conf-item-label" id="conf-mdc-label" style="margin-top:4px">—</div>
-            </div>
-            <div style="flex:1;min-width:180px">
-              <div class="conf-sublabel">Severity</div>
-              <div class="confidence-bar" style="height:10px">
-                <div class="conf-seg valid" id="seg-sev" style="width:0%"></div>
-              </div>
-              <div class="conf-item-label" id="conf-sev-label" style="margin-top:4px">—</div>
-            </div>
-          </div>
-        </div>
-      </div><!-- /CBG result card -->
-
-      <!-- Tariff metrics row -->
-      <div class="metrics-row">
+      <!-- Tariff metrics -->
+      <div class="metrics-row" style="margin-top:20px">
         <div class="metric-card">
           <div class="metric-label">Tarif Dasar Prediksi (Kelas 3)</div>
-          <div class="metric-value idr" id="metric-base-tariff">—</div>
+          <div class="metric-value idr" id="res-base-tariff">—</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Tarif untuk Kelas Anda</div>
-          <div class="metric-value idr" id="metric-kelas-tariff">—</div>
+          <div class="metric-label">Plafon BPJS (Kelas Dipilih)</div>
+          <div class="metric-value idr" id="res-kelas-tariff">—</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Financial Gap</div>
-          <div class="metric-value idr" id="metric-gap">—</div>
+          <div class="metric-label">Status Tarif</div>
+          <div class="metric-value" id="res-tariff-status">—</div>
         </div>
       </div>
 
-      <!-- SHAP explanation chart -->
-      <div class="card chart-card">
-        <div class="card-title">Faktor Penentu Prediksi MDC (SHAP)</div>
-        <div class="chart-wrap">
-          <canvas id="shap-chart"></canvas>
-        </div>
+      <!-- Risk + action row -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:16px">
+        <div id="res-risk"></div>
+        <div id="res-action"></div>
       </div>
 
-      <!-- Recommendation box -->
-      <div id="rec-box" class="recommendation-box"></div>
+      <!-- Recommendation summary -->
+      <div id="res-summary" style="margin-top:12px;color:var(--color-text-muted);font-size:14px;line-height:1.5"></div>
+    </div>
 
-    </div><!-- /result-section -->
-
-    <!-- ── Section 3: Recent Predictions Table ───────────────────────── -->
-    <div class="card">
+    <!-- ── Recent Predictions Table ─────────────────────────────────── -->
+    <div class="card" style="margin-top:24px">
       <div class="flex-between mb-0">
         <div class="card-title mb-0">Riwayat Prediksi Hari Ini</div>
       </div>
@@ -245,8 +180,8 @@
       <a href="/dashboard" class="table-link">Lihat semua prediksi di Dashboard →</a>
     </div>
 
-  </main><!-- /main -->
-</div><!-- /layout -->
+  </main>
+</div>
 
 <script src="/static/js/app.js"></script>
 </body>

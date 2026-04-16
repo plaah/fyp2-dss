@@ -234,6 +234,14 @@ ml_label
 | T6.3 Frontend search-as-you-type widgets | IcdSearchWidget class + 3 field replacements | ✅ Done |
 | T6.4 Tests + CLAUDE.md + git commit | 16 new tests → 107/107 total passing | ✅ Done |
 
+### Sprint 7 (Apr 17) — Simplified Test UI
+
+| Task | Description | Status |
+|---|---|---|
+| T7.1 Rewrite index.html — simple test UI | Clean form: diag + proc inputs + pills, care/kelas dropdowns, tarif | ✅ Done |
+| T7.2 Rewrite app.js — pill search + result render | _fetchPills/_renderPills, auto-resolve, correct field names | ✅ Done |
+| T7.3 E2E browser test | ICD pills appear, CBG result renders, tarif status shown | ✅ Done |
+
 ---
 
 ## API Endpoints

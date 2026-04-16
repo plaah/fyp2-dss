@@ -3,6 +3,7 @@ import time
 from flask import Blueprint, jsonify, request
 from src.services.surrogate_grouper import SurrogateGrouper
 from src.services.financial_estimator import FinancialEstimator
+from src.services.icd_search import icd_search_service
 
 api_bp = Blueprint('api', __name__)
 
@@ -218,3 +219,36 @@ def stats():
 @api_bp.route('/feedback', methods=['POST'])
 def feedback():
     return jsonify({'status': 'stub'}), 200
+
+
+@api_bp.route('/icd-search', methods=['GET'])
+def icd_search():
+    """
+    Search ICD codes by Indonesian medical term or code prefix.
+
+    Query params:
+      q     (str, required): search term, min 2 chars
+      type  (str, optional): 'diagnosis' (default) or 'procedure'
+      limit (int, optional): max results, default 5, max 10
+
+    Returns:
+      {"results": [...], "query": str, "type": str, "count": int}
+    """
+    q           = request.args.get('q', '').strip()
+    search_type = request.args.get('type', 'diagnosis')
+    limit       = min(int(request.args.get('limit', 5)), 10)
+
+    if len(q) < 2:
+        return jsonify({'results': [], 'query': q,
+                        'type': search_type, 'count': 0})
+
+    if search_type not in ('diagnosis', 'procedure'):
+        return jsonify({'error': "type must be 'diagnosis' or 'procedure'"}), 400
+
+    results = icd_search_service.search(q, search_type, limit)
+    return jsonify({
+        'results': results,
+        'query':   q,
+        'type':    search_type,
+        'count':   len(results),
+    })

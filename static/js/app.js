@@ -161,7 +161,9 @@ async function submitPrediction() {
 
   // Validate required
   if (!body.primary_icd10) {
-    _showAlert(alert, 'Diagnosis Utama ICD-10 wajib diisi.');
+    _showAlert(alert, 'Pilih diagnosis utama terlebih dahulu (ketik dan pilih dari dropdown).');
+    const diagInput = document.getElementById('diagnosis_search');
+    if (diagInput) diagInput.focus();
     return;
   }
 
@@ -761,6 +763,147 @@ function _showAlert(el, msg) {
    PAGE INIT — called from each page's DOMContentLoaded
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* ══════════════════════════════════════════════════════════════════════════
+   ICD SEARCH WIDGET — Sprint 6 / T6.3
+   Search-as-you-type ICD code selector (Tier 1 Indonesian + Tier 2 English
+   + Tier 3 code prefix). Debounced 300ms fetch to /api/v1/icd-search.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+class IcdSearchWidget {
+  /**
+   * @param {object} config
+   *   inputId    — visible text input id
+   *   hiddenId   — hidden input that stores the selected ICD code
+   *   badgeId    — span that shows the selected code as a pill badge
+   *   dropdownId — div container for the dropdown list
+   *   type       — 'diagnosis' | 'procedure'
+   *   placeholder
+   *   onSelect   — optional callback(code, item)
+   */
+  constructor(config) {
+    this.cfg          = config;
+    this.debounceTimer = null;
+    this.activeIndex  = -1;
+    this.results      = [];
+
+    this.input    = document.getElementById(config.inputId);
+    this.hidden   = document.getElementById(config.hiddenId);
+    this.badge    = document.getElementById(config.badgeId);
+    this.dropdown = document.getElementById(config.dropdownId);
+
+    if (!this.input) return;
+
+    if (config.placeholder) {
+      this.input.placeholder = config.placeholder;
+    }
+    this._bindEvents();
+  }
+
+  _bindEvents() {
+    this.input.addEventListener('input', () => {
+      clearTimeout(this.debounceTimer);
+      const q = this.input.value.trim();
+      if (q.length < 2) { this._close(); return; }
+      this.debounceTimer = setTimeout(() => this._search(q), 300);
+    });
+
+    this.input.addEventListener('keydown', (e) => {
+      if (!this.results.length) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.activeIndex = Math.min(this.activeIndex + 1, this.results.length - 1);
+        this._highlight();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.activeIndex = Math.max(this.activeIndex - 1, -1);
+        this._highlight();
+      } else if (e.key === 'Enter' && this.activeIndex >= 0) {
+        e.preventDefault();
+        this._select(this.results[this.activeIndex]);
+      } else if (e.key === 'Escape') {
+        this._close();
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (this.input && !this.input.contains(e.target) &&
+          this.dropdown && !this.dropdown.contains(e.target)) {
+        this._close();
+      }
+    });
+  }
+
+  async _search(q) {
+    try {
+      const type = this.cfg.type || 'diagnosis';
+      const res  = await fetch(
+        `${API_BASE}/icd-search?q=${encodeURIComponent(q)}&type=${type}&limit=6`
+      );
+      const data = await res.json();
+      this.results     = data.results || [];
+      this.activeIndex = -1;
+      this._render();
+    } catch (err) {
+      console.error('ICD search error:', err);
+    }
+  }
+
+  _render() {
+    this.dropdown.innerHTML = '';
+    if (!this.results.length) { this._close(); return; }
+    this.results.forEach((item, i) => {
+      const div = document.createElement('div');
+      div.className    = 'icd-dropdown-item';
+      div.dataset.index = i;
+      const label = item.indonesian_term || item.description || item.code;
+      const desc  = item.indonesian_term && item.description ? item.description : '';
+      div.innerHTML = `
+        <span class="icd-code">${item.code}</span>
+        <span>${label}</span>
+        ${desc ? `<span class="icd-desc">${desc}</span>` : ''}
+      `;
+      div.addEventListener('click', () => this._select(item));
+      this.dropdown.appendChild(div);
+    });
+    this.dropdown.classList.remove('hidden');
+  }
+
+  _select(item) {
+    this.hidden.value = item.code;
+    this.input.value  = item.indonesian_term || item.description || item.code;
+    if (this.badge) {
+      this.badge.textContent = item.code;
+      this.badge.classList.remove('hidden');
+    }
+    this._close();
+    if (this.cfg.onSelect) this.cfg.onSelect(item.code, item);
+  }
+
+  _highlight() {
+    this.dropdown.querySelectorAll('.icd-dropdown-item').forEach((el, i) => {
+      el.classList.toggle('active', i === this.activeIndex);
+    });
+  }
+
+  _close() {
+    if (this.dropdown) this.dropdown.classList.add('hidden');
+    this.results     = [];
+    this.activeIndex = -1;
+  }
+
+  clear() {
+    if (this.hidden) this.hidden.value = '';
+    if (this.input)  this.input.value  = '';
+    if (this.badge)  this.badge.classList.add('hidden');
+    this._close();
+  }
+
+  getValue() { return this.hidden ? this.hidden.value : ''; }
+}
+
+/* ── Widget instances (global so HTML onclick="diagnosisWidget.clear()" works) */
+let diagnosisWidget, inacbgWidget, procedureWidget;
+
 document.addEventListener('DOMContentLoaded', () => {
   checkApiStatus();
 
@@ -769,6 +912,44 @@ document.addEventListener('DOMContentLoaded', () => {
   if (submitBtn) {
     submitBtn.addEventListener('click', submitPrediction);
     _loadRecentPredictions();
+
+    // Initialise ICD search widgets (prediction page only)
+    diagnosisWidget = new IcdSearchWidget({
+      inputId:    'diagnosis_search',
+      hiddenId:   'primary_icd10',
+      badgeId:    'diagnosis_badge',
+      dropdownId: 'diagnosis_dropdown',
+      type:       'diagnosis',
+      placeholder: 'Ketik nama penyakit... (hipertensi, pneumonia...)',
+      onSelect: (code, item) => {
+        // Auto-sync INACBG field with same code if not already set
+        if (inacbgWidget && !inacbgWidget.getValue()) {
+          document.getElementById('inacbg_icd10').value = code;
+          document.getElementById('inacbg_search').value =
+            item.indonesian_term || item.description || code;
+          document.getElementById('inacbg_badge').textContent = code;
+          document.getElementById('inacbg_badge').classList.remove('hidden');
+        }
+      },
+    });
+
+    inacbgWidget = new IcdSearchWidget({
+      inputId:    'inacbg_search',
+      hiddenId:   'inacbg_icd10',
+      badgeId:    'inacbg_badge',
+      dropdownId: 'inacbg_dropdown',
+      type:       'diagnosis',
+      placeholder: 'Sama dengan diagnosis utama (opsional)',
+    });
+
+    procedureWidget = new IcdSearchWidget({
+      inputId:    'procedure_search',
+      hiddenId:   'icd9_procedure',
+      badgeId:    'procedure_badge',
+      dropdownId: 'procedure_dropdown',
+      type:       'procedure',
+      placeholder: 'Ketik tindakan... (nebulisasi, infus, operasi...)',
+    });
   }
 
   // Dashboard page

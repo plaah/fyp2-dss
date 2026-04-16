@@ -225,6 +225,15 @@ ml_label
 | T5.8 Update test suite | 91/91 tests passing | ✅ Done |
 | T5.9 Housekeeping | Status script + CLAUDE.md + git commit | ✅ Done |
 
+### Sprint 6 (Apr 16) — Free-text ICD Search Layer
+
+| Task | Description | Status |
+|---|---|---|
+| T6.1 Build Indonesian ICD lookup tables | 657 ICD-10 terms + 2,856 ICD-9 procedure terms | ✅ Done |
+| T6.2 /api/v1/icd-search endpoint | 3-tier IcdSearchService (Indonesian→EN→code prefix) | ✅ Done |
+| T6.3 Frontend search-as-you-type widgets | IcdSearchWidget class + 3 field replacements | ✅ Done |
+| T6.4 Tests + CLAUDE.md + git commit | 16 new tests → 107/107 total passing | ✅ Done |
+
 ---
 
 ## API Endpoints
@@ -236,6 +245,7 @@ ml_label
 | `/api/v1/financial-impact` | POST | S3 | ✅ Live |
 | `/api/v1/recommend` | POST | S3 | ✅ Live |
 | `/api/v1/full-assessment` | POST | S3 | ✅ Live |
+| `/api/v1/icd-search` | GET | S6 | ✅ Live |
 | `/api/v1/stats` | GET | S4 | ✅ Live |
 | `/api/v1/feedback` | POST | S5 | ⏳ Planned |
 
@@ -362,8 +372,14 @@ Hooks in place:
 ## Current Session Priorities
 1. `python scripts/surrogate_grouper_status.py` — check all artifacts
 2. `python app.py` — verify Flask starts on port 5000/5001
-3. `python -m pytest tests/ -q` — all 91 tests must pass
+3. `python -m pytest tests/ -q` — all 107 tests must pass
 4. Check CLAUDE.md section "ML Architecture" for current model metrics
+
+## Data Inventory (Sprint 6)
+- `data/indonesian_icd10_lookup.csv` — 657 validated Indonesian→ICD-10 pairs
+- `data/indonesian_icd9_lookup.csv`  — 2,856 Indonesian procedure→ICD-9 pairs
+- `data/icd10_2010_reference.csv`    — 33,912 WHO ICD-10 Vol.3 terms (English)
+- `data/icd9_cm_procedures.csv`      — 3,978 ICD-9-CM procedure codes (English)
 
 ## Slim Context Rules (save tokens)
 - Read ONLY the section you need, not the whole file

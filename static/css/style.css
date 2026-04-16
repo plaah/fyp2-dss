@@ -843,3 +843,84 @@ tbody tr.row-invalid    { border-left: 3px solid var(--color-invalid); }
   color: var(--color-text-muted);
   margin-top: 4px;
 }
+
+/* ── ICD Search Widget (Sprint 6 — T6.3) ───────────────────────────────── */
+.icd-search-wrapper {
+    position: relative;
+    width: 100%;
+}
+.icd-search-wrapper input.icd-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 14px;
+    color: var(--color-text);
+    background: var(--color-surface);
+    box-sizing: border-box;
+}
+.icd-search-wrapper input.icd-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+}
+.icd-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    z-index: 1000;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.icd-dropdown.hidden { display: none; }
+.icd-dropdown-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 13px;
+    line-height: 1.4;
+}
+.icd-dropdown-item:last-child { border-bottom: none; }
+.icd-dropdown-item:hover,
+.icd-dropdown-item.active { background: #eff6ff; }
+.icd-dropdown-item .icd-code {
+    font-weight: 600;
+    color: var(--color-primary);
+    margin-right: 6px;
+}
+.icd-dropdown-item .icd-desc {
+    color: var(--color-text-muted);
+    font-size: 12px;
+    display: block;
+    margin-top: 2px;
+}
+.icd-selected-badge {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.icd-selected-badge.hidden { display: none; }
+.icd-clear-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #94a3b8;
+    font-size: 18px;
+    padding: 0;
+    line-height: 1;
+}
+.icd-clear-btn:hover { color: #ef4444; }

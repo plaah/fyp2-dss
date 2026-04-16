@@ -61,27 +61,50 @@
       <div class="card-title">Data Klinis Pasien</div>
 
       <div class="form-grid">
-        <!-- Row 1: ICD-10 diagnosis codes -->
+        <!-- Row 1: ICD-10 diagnosis codes — search-as-you-type -->
         <div class="form-group">
-          <label for="primary_icd10">Diagnosis Utama ICD-10 <span class="required">*</span></label>
-          <input type="text" id="primary_icd10" placeholder="Contoh: I10, J18.0, E11.9"
-                 autocomplete="off" autocapitalize="characters"
-                 oninput="this.value=this.value.toUpperCase()">
-          <div class="form-hint">Diagnosis utama dokter</div>
+          <label for="diagnosis_search">Diagnosis Utama <span class="required">*</span></label>
+          <div class="icd-search-wrapper">
+            <input type="text" id="diagnosis_search" class="icd-input"
+                   autocomplete="off"
+                   placeholder="Ketik nama penyakit... (hipertensi, pneumonia...)">
+            <button type="button" class="icd-clear-btn"
+                    onclick="diagnosisWidget && diagnosisWidget.clear()">×</button>
+          </div>
+          <div id="diagnosis_dropdown" class="icd-dropdown hidden"></div>
+          <input type="hidden" id="primary_icd10" name="primary_icd10">
+          <span id="diagnosis_badge" class="icd-selected-badge hidden"></span>
+          <div class="form-hint">Ketik nama penyakit atau kode ICD-10</div>
         </div>
         <div class="form-group">
-          <label for="inacbg_icd10">Kode Diagnosis INACBG</label>
-          <input type="text" id="inacbg_icd10" placeholder="Sama dengan ICD-10 atau lebih spesifik"
-                 autocomplete="off" autocapitalize="characters"
-                 oninput="this.value=this.value.toUpperCase()">
-          <div class="form-hint">Kode diagnosa untuk INACBG grouper</div>
+          <label for="inacbg_search">Diagnosis INACBG</label>
+          <div class="icd-search-wrapper">
+            <input type="text" id="inacbg_search" class="icd-input"
+                   autocomplete="off"
+                   placeholder="Sama dengan diagnosis utama (opsional)">
+            <button type="button" class="icd-clear-btn"
+                    onclick="inacbgWidget && inacbgWidget.clear()">×</button>
+          </div>
+          <div id="inacbg_dropdown" class="icd-dropdown hidden"></div>
+          <input type="hidden" id="inacbg_icd10" name="inacbg_icd10">
+          <span id="inacbg_badge" class="icd-selected-badge hidden"></span>
+          <div class="form-hint">Biasanya sama dengan diagnosis utama</div>
         </div>
 
         <!-- Row 2: Procedure + Care Type -->
         <div class="form-group">
-          <label for="icd9_procedure">Prosedur ICD-9 (opsional)</label>
-          <input type="text" id="icd9_procedure" placeholder="Contoh: 89.09, 93.39, 57.33">
-          <div class="form-hint">Tindakan/prosedur yang direncanakan</div>
+          <label for="procedure_search">Rencana Tindakan (opsional)</label>
+          <div class="icd-search-wrapper">
+            <input type="text" id="procedure_search" class="icd-input"
+                   autocomplete="off"
+                   placeholder="Ketik tindakan... (nebulisasi, infus, operasi...)">
+            <button type="button" class="icd-clear-btn"
+                    onclick="procedureWidget && procedureWidget.clear()">×</button>
+          </div>
+          <div id="procedure_dropdown" class="icd-dropdown hidden"></div>
+          <input type="hidden" id="icd9_procedure" name="icd9_procedure">
+          <span id="procedure_badge" class="icd-selected-badge hidden"></span>
+          <div class="form-hint">Ketik nama tindakan atau kode ICD-9</div>
         </div>
         <div class="form-group">
           <label for="care_type">Jenis Pelayanan</label>

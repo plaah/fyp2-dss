@@ -109,6 +109,19 @@ class IcdSearchService:
                     results.append(self._icd10_row(row, 'indonesian_lookup',
                                                    str(row.get('confidence', 'medium'))))
 
+            # Tier 1c — word fallback: try longest word if multi-word query returns nothing
+            if not results and ' ' in q:
+                words = sorted(q.split(), key=len, reverse=True)
+                for word in words:
+                    if len(word) < 3:
+                        continue
+                    word_matches = df[df['indonesian_term'].str.contains(word, na=False, regex=False)]
+                    for _, row in word_matches.head(limit).iterrows():
+                        results.append(self._icd10_row(row, 'indonesian_lookup',
+                                                       str(row.get('confidence', 'medium'))))
+                    if results:
+                        break
+
         # Tier 2 — English ICD-10 reference
         ref = self._icd10_reference
         if len(results) < limit and not ref.empty:
@@ -179,6 +192,19 @@ class IcdSearchService:
                 for _, row in partial.iterrows():
                     results.append(self._icd9_row(row, term_col, code_col,
                                                   'indonesian_procedure_lookup', 'medium'))
+
+            # Tier 1c — word fallback for multi-word queries
+            if not results and ' ' in q:
+                words = sorted(q.split(), key=len, reverse=True)
+                for word in words:
+                    if len(word) < 3:
+                        continue
+                    word_matches = df[df[term_col].str.contains(word, na=False, regex=False)]
+                    for _, row in word_matches.head(limit).iterrows():
+                        results.append(self._icd9_row(row, term_col, code_col,
+                                                      'indonesian_procedure_lookup', 'medium'))
+                    if results:
+                        break
 
         # Tier 2 — ICD-9-CM English reference
         ref = self._icd9_reference

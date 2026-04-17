@@ -48,6 +48,75 @@ def clean_icd9_code(code):
     return None
 
 
+# ── Step 0 — Curated Alias Table (top 20 most-searched Indonesian terms) ──────
+
+CURATED_ALIASES = [
+    ('diabetes',        'E11.9', 'Type 2 diabetes mellitus, unspecified'),
+    ('diabetes melitus', 'E11.9', 'Type 2 diabetes mellitus, unspecified'),
+    ('dm tipe 2',       'E11.9', 'Type 2 diabetes mellitus, unspecified'),
+    ('dm',              'E11.9', 'Diabetes mellitus'),
+    ('demam',           'R50.9', 'Fever, unspecified'),
+    ('tipes',           'A01.0', 'Typhoid fever'),
+    ('tifoid',          'A01.0', 'Typhoid fever'),
+    ('typhoid',         'A01.0', 'Typhoid fever'),
+    ('diare',           'A09.9', 'Gastroenteritis and colitis of unspecified origin'),
+    ('stroke',          'I64',   'Stroke, not specified as haemorrhage or infarction'),
+    ('gerd',            'K21.9', 'Gastro-oesophageal reflux disease without oesophagitis'),
+    ('asam urat',       'M10.9', 'Gout, unspecified'),
+    ('maag',            'K29.7', 'Gastritis, unspecified'),
+    ('batu ginjal',     'N20.0', 'Calculus of kidney'),
+    ('sesak napas',     'R06.0', 'Dyspnoea'),
+    ('kejang',          'R56.8', 'Other and unspecified convulsions'),
+    ('anemia',          'D64.9', 'Anaemia, unspecified'),
+    ('usus buntu',      'K37',   'Unspecified diseases of appendix'),
+    ('katarak',         'H26.9', 'Cataract, unspecified'),
+    ('tumor',           'D48.9', 'Neoplasm of uncertain behaviour, unspecified'),
+    ('kista',           'N83.2', 'Other and unspecified ovarian cysts'),
+    ('hernia',          'K46.9', 'Unspecified abdominal hernia without obstruction'),
+    ('wasir',           'K64.9', 'Unspecified haemorrhoids'),
+    ('sakit kepala',    'R51',   'Headache'),
+    ('hipertensi',      'I10',   'Essential (primary) hypertension'),
+    ('pneumonia',       'J18.9', 'Pneumonia, unspecified'),
+    ('bronkitis',       'J40',   'Bronchitis, not specified as acute or chronic'),
+    ('asma',            'J45.9', 'Asthma, unspecified'),
+    ('infeksi saluran kemih', 'N39.0', 'Urinary tract infection, site not specified'),
+    ('isk',             'N39.0', 'Urinary tract infection, site not specified'),
+]
+
+
+def build_icd10_from_tamtech():
+    """Mine idrg_primary_icd10_desc from tamtech_raw for additional Indonesian terms."""
+    raw_path = 'data/tamtech_raw_extract.csv'
+    if not os.path.exists(raw_path):
+        print("  [Step 0] tamtech_raw_extract.csv not found, skipping.")
+        return []
+
+    raw = pd.read_csv(raw_path, usecols=['idrg_primary_icd10', 'idrg_primary_icd10_desc'], low_memory=False)
+    raw = raw.dropna(subset=['idrg_primary_icd10', 'idrg_primary_icd10_desc'])
+    raw['code_clean'] = raw['idrg_primary_icd10'].apply(clean_icd10_code)
+    raw['term_clean'] = raw['idrg_primary_icd10_desc'].apply(clean_term)
+    raw = raw.dropna(subset=['code_clean', 'term_clean'])
+    raw = raw[raw['term_clean'].str.len() > 2]
+
+    # Keep most common ICD-10 code per description
+    pairs = (raw.groupby('term_clean')['code_clean']
+               .agg(lambda x: x.value_counts().index[0])
+               .reset_index()
+               .rename(columns={'term_clean': 'indonesian_term', 'code_clean': 'icd10_code'}))
+
+    records = []
+    for _, row in pairs.iterrows():
+        records.append({
+            'indonesian_term': row['indonesian_term'],
+            'icd10_code':      row['icd10_code'],
+            'description_en':  '',
+            'confidence':      'medium',
+            'source':          'tamtech_raw',
+        })
+    print(f"  [Step 0] Tamtech raw descriptions mined: {len(records)} terms")
+    return records
+
+
 # ── T6.1 Step 1 — ICD-10 Indonesian Lookup from Backtesting Data ─────────────
 
 def build_icd10_lookup():
@@ -92,15 +161,32 @@ def build_icd10_lookup():
                 'source': 'backtesting_apr_2026',
             })
 
-    # Merge both sources
-    all_records = dec_records + apr_records
+    # Step 0a: tamtech raw descriptions
+    tamtech_records = build_icd10_from_tamtech()
+
+    # Step 0b: curated alias table (highest priority)
+    alias_records = [
+        {
+            'indonesian_term': term,
+            'icd10_code':      code,
+            'description_en':  desc,
+            'confidence':      'high',
+            'source':          'curated_alias',
+        }
+        for term, code, desc in CURATED_ALIASES
+    ]
+
+    # Merge all sources: alias > backtesting > tamtech (priority order)
+    all_records = alias_records + dec_records + apr_records + tamtech_records
     df = pd.DataFrame(all_records)
 
-    # Deduplicate: for same term, keep highest confidence entry
-    df['conf_rank'] = df['confidence'].map({'high': 0, 'medium': 1})
-    df = (df.sort_values('conf_rank')
+    # Deduplicate: for same term, keep highest confidence entry (alias wins)
+    source_priority = {'curated_alias': 0, 'backtesting_dec_2025': 1, 'backtesting_apr_2026': 1, 'tamtech_raw': 2}
+    df['src_rank']  = df['source'].map(source_priority).fillna(3)
+    df['conf_rank'] = df['confidence'].map({'high': 0, 'medium': 1}).fillna(2)
+    df = (df.sort_values(['conf_rank', 'src_rank'])
             .drop_duplicates(subset='indonesian_term', keep='first')
-            .drop('conf_rank', axis=1)
+            .drop(['conf_rank', 'src_rank'], axis=1)
             .reset_index(drop=True))
 
     # Sort: high confidence first

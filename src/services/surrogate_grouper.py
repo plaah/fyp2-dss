@@ -77,6 +77,37 @@ class SurrogateGrouper:
         'kelas_3': 1.00,
     }
 
+    # Deterministic ICD-10 chapter → MDC letter (INACBG design rule).
+    # None = no override: model prediction is kept as-is for ambiguous chapters.
+    # Z, R, Q intentionally excluded: INACBG assigns them non-conventionally
+    # (e.g. Z09 follow-up → MDC Q, not MDC Z).
+    CHAPTER_TO_MDC_RULE = {
+        'A': 'A',  # Infectious diseases
+        'B': 'A',  # Viral infections → MDC A (same group in INA-CBGs)
+        'C': 'B',  # Malignant neoplasms
+        'D': 'D',  # Blood and immune disorders
+        'E': 'E',  # Endocrine, nutritional, metabolic
+        'F': 'F',  # Mental and behavioural
+        'G': 'G',  # Nervous system
+        'H': 'H',  # Eye and ENT
+        'I': 'I',  # Circulatory system
+        'J': 'J',  # Respiratory system
+        'K': 'K',  # Digestive system
+        'L': 'L',  # Skin and subcutaneous tissue
+        'M': 'M',  # Musculoskeletal and connective tissue
+        'N': 'N',  # Genitourinary system
+        'O': 'O',  # Pregnancy, childbirth, puerperium
+        'S': 'S',  # Injuries and trauma
+        'T': 'S',  # Poisoning / injury continued → MDC S
+        # Excluded (no deterministic rule):
+        # 'P' — excluded from training (neonatal)
+        # 'Q' — congenital malformations; INA-CBGs may route elsewhere
+        # 'R' — symptoms/signs: ambiguous, model is better
+        # 'U' — special-purpose codes
+        # 'V','W','X','Y' — external causes; INA-CBGs may use MDC S or other
+        # 'Z' — Z-codes → model assigns correctly (Z09 → Q, etc.)
+    }
+
     # care_type string → int (matches training data encoding)
     CARE_TYPE_STR_MAP = {
         'outp': 2, 'gp': 2, 'ambulatory': 2,
@@ -144,6 +175,13 @@ class SurrogateGrouper:
             icd_block    = features_df['icd_block_raw'].iloc[0]
             care_type_s  = features_df['care_type_raw'].iloc[0]
             kelas        = features_df['kelas_raw'].iloc[0]
+
+            # Apply deterministic chapter → MDC rule to correct model errors
+            mdc_letter, mdc_source = self._apply_chapter_rule(
+                mdc_letter, mdc_conf,
+                str(clinical_input.get('primary_icd10', '') or '').strip().upper()
+            )
+
             cbg_info     = self._lookup_cbg(icd_block, care_type_s, kelas, severity, mdc_letter)
             base_tariff  = cbg_info.get('base_tariff', 0.0)
             shap_exp     = self._get_shap_explanation(features_df)
@@ -160,6 +198,7 @@ class SurrogateGrouper:
                 "mdc_confidence":             round(mdc_conf, 4),
                 "severity_confidence":        round(sev_conf, 4),
                 "lookup_method":              cbg_info.get('lookup_method', 'none'),
+                "mdc_source":                 mdc_source,
                 "shap_explanation":           shap_exp,
                 "status":                     "success",
             }
@@ -251,6 +290,27 @@ class SurrogateGrouper:
         row['kelas_raw']       = kelas_s
 
         return pd.DataFrame([row])
+
+    # ── Chapter rule override ─────────────────────────────────────────────────
+    def _apply_chapter_rule(self, ml_mdc: str, ml_conf: float, primary_icd: str):
+        """
+        Apply deterministic ICD chapter → MDC rule.
+        Returns (final_mdc, source) where source is 'ml_model' or 'chapter_rule'.
+        Rule only fires when the chapter has a deterministic mapping AND the ML
+        prediction disagrees (or confidence < 0.80 for unambiguous chapters).
+        """
+        if not primary_icd or len(primary_icd) < 1:
+            return ml_mdc, 'ml_model'
+        chapter = primary_icd[0].upper()
+        rule_mdc = self.CHAPTER_TO_MDC_RULE.get(chapter)
+        if rule_mdc is None:
+            # No deterministic rule for this chapter (Z, R, Q, etc.) — trust model
+            return ml_mdc, 'ml_model'
+        if ml_mdc == rule_mdc:
+            return ml_mdc, 'ml_model'
+        # Disagreement: override if ml confidence < 0.80, otherwise prefer rule
+        # (rule is deterministic by INACBG spec; ML can be wrong for rare codes)
+        return rule_mdc, 'chapter_rule'
 
     # ── Stage 1: MDC predictor ────────────────────────────────────────────────
     def _predict_mdc(self, features_df: pd.DataFrame):

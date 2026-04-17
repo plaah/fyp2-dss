@@ -290,6 +290,21 @@ DB: PostgreSQL `fyp2_db` @ localhost:5432 (user: aflakhamjad)
 
 ---
 
+## Testing Agent
+
+File: `scripts/run_doctor_agent.py`
+Role: Simulates Dr. Budi Santoso (GP) testing 8 clinical prediction cases + 5 ICD search cases
+Run:  `python scripts/run_doctor_agent.py --direct`
+Reports saved to: `docs/test_reports/`
+Last run: 2026-04-17 — **11/13 PASS, 2 WARN, 0 FAIL — READY FOR DEMO**
+
+Known WARNs (model limitations, not bugs):
+- Severity III inpatient cases map to cross-MDC CBGs in lookup table (training data artifact)
+- Only 91 severity-III records in 3,076 training set → unreliable CBG mapping at extreme severity
+- Affects: J18.0 inp sev=III → I-MDC; I63.9 inp sev=III → E-MDC
+
+---
+
 ## Neurovi Integration
 
 Status: **Prepared, not yet active** — awaiting Neurovi API documentation from Tamtech.

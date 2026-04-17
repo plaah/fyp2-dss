@@ -242,6 +242,14 @@ ml_label
 | T7.2 Rewrite app.js — pill search + result render | _fetchPills/_renderPills, auto-resolve, correct field names | ✅ Done |
 | T7.3 E2E browser test | ICD pills appear, CBG result renders, tarif status shown | ✅ Done |
 
+### Sprint 8 (Apr 17) — ICD Lookup Expansion + MDC Accuracy Fix
+
+| Task | Description | Status |
+|---|---|---|
+| T8.1 Expand ICD-10 lookup | Mine tamtech_raw + 30 curated aliases → 657→1257 terms | ✅ Done |
+| T8.2 Chapter-rule MDC override | CHAPTER_TO_MDC_RULE in surrogate_grouper.py, surgical no-retrain | ✅ Done |
+| T8.3 Verify + tests | 9/9 MDC test cases pass, 107/107 full suite passing | ✅ Done |
+
 ---
 
 ## API Endpoints

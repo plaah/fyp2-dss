@@ -5,38 +5,36 @@ Initialises the Flask app, SQLAlchemy database, and registers all blueprints.
 Page routes for the frontend dashboard are also defined here.
 """
 
-from flask import Flask, render_template
+from pathlib import Path
+from flask import Flask, send_from_directory, abort
 from config import Config
 from src.models.db_models import db
 from src.api.routes import api_bp
 
+REACT_DIST = Path(__file__).parent / 'frontend' / 'dist'
+
 
 def create_app() -> Flask:
-    """
-    Create and configure the Flask application.
-
-    Returns:
-        Flask: Fully configured application instance.
-    """
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=None)
     app.config.from_object(Config)
 
-    # Initialise SQLAlchemy with this app
     db.init_app(app)
-
-    # Register API blueprint under /api/v1
     app.register_blueprint(api_bp, url_prefix='/api/v1')
 
-    # ── Frontend page routes ───────────────────────────────────────────────────
-    @app.route('/')
-    def index():
-        """Serve the main ICD Grouping Prediction tool."""
-        return render_template('index.html')
+    # ── Serve React build ─────────────────────────────────────────────────────
+    @app.route('/assets/<path:filename>')
+    def react_assets(filename: str):
+        return send_from_directory(REACT_DIST / 'assets', filename)
 
-    @app.route('/dashboard')
-    def dashboard():
-        """Serve the Analytics Overview dashboard."""
-        return render_template('dashboard.html')
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>')
+    def serve_react(path: str):
+        if path.startswith('api/'):
+            abort(404)
+        target = REACT_DIST / path
+        if path and target.exists() and target.is_file():
+            return send_from_directory(REACT_DIST, path)
+        return send_from_directory(REACT_DIST, 'index.html')
 
     return app
 

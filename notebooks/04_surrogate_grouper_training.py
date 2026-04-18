@@ -17,6 +17,8 @@ Data facts (confirmed by CSV inspection):
 
 import os, sys, warnings, pickle, json
 warnings.filterwarnings("ignore")
+import optuna
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 import numpy as np
 import pandas as pd
@@ -316,7 +318,7 @@ print(f"  MDC classes ({NUM_MDC}): {list(mdc_le.classes_)}")
 # Oversample minority classes (< 15 samples) using sklearn.utils.resample
 X_arr = X.values
 counts = pd.Series(y_mdc).value_counts()
-min_samples = 15
+min_samples = 30
 X_os, y_os = X_arr.copy(), y_mdc.copy()
 for cls_idx, cnt in counts.items():
     if cnt < min_samples:
@@ -342,28 +344,64 @@ X_tr_m, X_val_m, y_tr_m, y_val_m = train_test_split(
 )
 sw_tr_m = compute_sample_weight('balanced', y_tr_m)
 
-mdc_es = xgb.XGBClassifier(
-    n_estimators=300, max_depth=6, learning_rate=0.1,
-    eval_metric='mlogloss', objective='multi:softprob',
-    num_class=NUM_MDC, random_state=42, n_jobs=-1, verbosity=0,
-)
+# ── Optuna hyperparameter search (40 trials) ─────────────────────────────────
+print("  Optuna MDC search (40 trials)...")
+
+def _mdc_objective(trial):
+    params = dict(
+        n_estimators     = trial.suggest_int('n_estimators', 200, 600),
+        max_depth        = trial.suggest_int('max_depth', 4, 10),
+        learning_rate    = trial.suggest_float('learning_rate', 0.05, 0.3, log=True),
+        subsample        = trial.suggest_float('subsample', 0.6, 1.0),
+        colsample_bytree = trial.suggest_float('colsample_bytree', 0.6, 1.0),
+        min_child_weight = trial.suggest_int('min_child_weight', 1, 10),
+        objective        = 'multi:softprob',
+        eval_metric      = 'mlogloss',
+        num_class        = NUM_MDC,
+        random_state     = 42,
+        n_jobs           = -1,
+        verbosity        = 0,
+    )
+    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    clf = xgb.XGBClassifier(**params)
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    sw_cv = compute_sample_weight('balanced', y_train_m)
+    return cross_val_score(clf, X_train_m, y_train_m, cv=skf,
+                           scoring='accuracy', n_jobs=1,
+                           fit_params={'sample_weight': sw_cv}).mean()
+
+_study = optuna.create_study(direction='maximize')
+_study.optimize(_mdc_objective, n_trials=40, show_progress_bar=False)
+_best = _study.best_params
+_best.update(dict(objective='multi:softprob', eval_metric='mlogloss',
+                  num_class=NUM_MDC, random_state=42, n_jobs=-1, verbosity=0))
+print(f"  Best CV acc: {_study.best_value:.4f} | params: {_best}")
+
+# ── Early stopping pass with best Optuna params ───────────────────────────────
+mdc_es = xgb.XGBClassifier(**{**_best, 'n_estimators': _best['n_estimators'] + 100})
 mdc_es.fit(X_tr_m, y_tr_m, sample_weight=sw_tr_m,
            eval_set=[(X_val_m, y_val_m)],
            early_stopping_rounds=20, verbose=False)
 best_iter = mdc_es.best_iteration + 1
 print(f"  Early stopping fired at iteration {best_iter}")
 
-mdc_clf = xgb.XGBClassifier(
-    n_estimators=best_iter, max_depth=6, learning_rate=0.1,
-    eval_metric='mlogloss', objective='multi:softprob',
-    num_class=NUM_MDC, random_state=42, n_jobs=-1, verbosity=0,
-)
+_best_final = {**_best, 'n_estimators': best_iter}
+mdc_clf = xgb.XGBClassifier(**_best_final)
 sw_full_m = compute_sample_weight('balanced', y_train_m)
 mdc_clf.fit(X_train_m, y_train_m, sample_weight=sw_full_m, verbose=False)
 
 log_lines += ["## Stage 1 — MDC Predictor", ""]
 acc_mdc, f1_mdc = evaluate_model(
     "MDC Predictor (XGBoost)", mdc_clf, X_test_m, y_test_m, mdc_le, log_lines)
+
+# 5-Fold CV for thesis reporting
+from sklearn.model_selection import StratifiedKFold, cross_val_score as _cvs
+_skf5 = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+_sw_cv5 = compute_sample_weight('balanced', y_train_m)
+_cv5 = _cvs(mdc_clf, X_train_m, y_train_m, cv=_skf5, scoring='accuracy',
+            fit_params={'sample_weight': _sw_cv5})
+print(f"  5-Fold CV MDC: {_cv5.mean():.4f} ± {_cv5.std():.4f}")
+log_lines.append(f"- 5-Fold CV Accuracy: {_cv5.mean():.4f} ± {_cv5.std():.4f}\n")
 
 # Check success criteria and optionally tune
 if acc_mdc < 0.75:

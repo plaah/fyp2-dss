@@ -29,3 +29,4 @@ pytest-cov==4.1.0
 # Dev tools
 jupyter==1.0.0
 ipykernel==6.27.1
+optuna>=3.6.0

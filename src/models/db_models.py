@@ -116,3 +116,26 @@ class SystemStats(db.Model):
     avg_reimbursement_probability = db.Column(db.Float)
     total_financial_gap_idr     = db.Column(db.BigInteger, default=0)
     top_icd10_code              = db.Column(db.String(20))
+
+
+class PredictionFeedback(db.Model):
+    __tablename__ = 'prediction_feedback'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    prediction_id = db.Column(db.Integer, db.ForeignKey('predictions.id'), nullable=True)
+    submitted_cbg = db.Column(db.String(20))
+    correct_cbg   = db.Column(db.String(20), nullable=False)
+    is_correct    = db.Column(db.Boolean, default=False)
+    notes         = db.Column(db.Text)
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id':            self.id,
+            'prediction_id': self.prediction_id,
+            'submitted_cbg': self.submitted_cbg,
+            'correct_cbg':   self.correct_cbg,
+            'is_correct':    self.is_correct,
+            'notes':         self.notes,
+            'created_at':    self.created_at.isoformat() if self.created_at else None,
+        }

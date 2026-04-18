@@ -218,7 +218,17 @@ def stats():
 
 @api_bp.route('/feedback', methods=['POST'])
 def feedback():
-    return jsonify({'status': 'stub'}), 200
+    try:
+        body = request.get_json(force=True, silent=True)
+        if not body:
+            return jsonify({'status': 'error', 'message': 'Invalid JSON body'}), 400
+        if not body.get('correct_cbg'):
+            return jsonify({'status': 'error', 'message': 'correct_cbg is required'}), 422
+        from src.models.crud import save_feedback
+        row = save_feedback(body)
+        return jsonify({'status': 'success', 'feedback_id': row.id}), 201
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @api_bp.route('/icd-search', methods=['GET'])

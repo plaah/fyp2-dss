@@ -40,6 +40,66 @@ planned procedure (ICD-9), the system predicts:
 
 ---
 
+## Use Case Model — System Scope
+
+Source: `docs/use_case_diagram.png` (UC001–UC015)
+
+**Actors:**
+| Actor | Type | Role |
+|---|---|---|
+| Physician | Primary | Enters diagnosis/procedure; views prediction + financial risk |
+| Hospital Administrator | Secondary | Views analytics dashboard; exports reports |
+| Neurovi System | External system | Sends clinical encounter data to DSS via integration hook |
+
+**Module Breakdown:**
+
+### Core Clinical Interaction
+| UC | Name | Notes |
+|---|---|---|
+| UC001 | Assess Clinical Grouping and Financial Impact | **Central use case** — orchestrates all modules; triggered by Physician |
+
+### Predictive Engine Module (included by UC001)
+| UC | Name | Implementation status |
+|---|---|---|
+| UC003 | Predict INA-CBG Base Tariff | ✅ Stage 3 CBG lookup table |
+| UC004 | Predict Grouping Success Probability | ✅ `mdc_confidence` + `lookup_method` in response |
+| UC005 | Predict MDC & Severity Level | ✅ Stage 1 XGBoost + Stage 2 XGBoost |
+
+### Data Integration Module (included by UC001)
+| UC | Name | Implementation status |
+|---|---|---|
+| UC002 | Receive Clinical Inputs from Neurovi | ⏳ Stub only — awaiting Neurovi API docs |
+| UC015 | Persist Prediction to Audit Trail | ✅ `predictions` table in PostgreSQL |
+
+### Financial and Recommendation Module (included by UC001)
+| UC | Name | Implementation status |
+|---|---|---|
+| UC006 | Estimate Financial Impact and Risk Level | ✅ `FinancialEstimator` — gap, risk_level, ceiling |
+| UC007 | Generate Action Recommendation | ✅ `RecommendationEngine` — synthesis text |
+
+### Analytics and Feedback Module
+| UC | Name | Implementation status |
+|---|---|---|
+| UC011 | View Financial Performance Dashboard | ✅ `/dashboard` — KPI cards, charts, predictions table |
+| UC012 | Export Monthly Reimbursement Report | ✅ CSV export button on dashboard |
+| UC013 | Flag Inaccurate AI Prediction | ✅ inline feedback form + DB table |
+| UC014 | Submit Feedback for Model Retraining | ✅ save_feedback() persists to prediction_feedback table |
+
+### Explainability Interface Module (included by UC001)
+| UC | Name | Implementation status |
+|---|---|---|
+| UC008 | Generate SHAP-Based Explanation | ✅ TreeExplainer on MDC predictor, top-3 features |
+| UC009 | Render CBG Prediction Card | ✅ CBG headline + badge row in frontend |
+| UC010 | Display Real-Time Justification Tooltip | ✅ tooltip on SHAP bars |
+
+**Relationship summary:**
+- UC001 **includes**: UC002, UC003, UC004, UC005, UC006, UC007, UC008, UC009, UC013, UC015
+- UC009 **extends** with: UC010
+- UC011 **extends** with: UC012
+- UC013 **includes**: UC014
+
+---
+
 ## Tech Stack & Environment
 
 - **Python:** 3.9.6
@@ -249,6 +309,17 @@ ml_label
 | T8.1 Expand ICD-10 lookup | Mine tamtech_raw + 30 curated aliases → 657→1257 terms | ✅ Done |
 | T8.2 Chapter-rule MDC override | CHAPTER_TO_MDC_RULE in surrogate_grouper.py, surgical no-retrain | ✅ Done |
 | T8.3 Verify + tests | 9/9 MDC test cases pass, 107/107 full suite passing | ✅ Done |
+
+### Sprint 9 (Apr 18) — SHAP UI + Feedback Loop
+
+| Task | Description | Status |
+|---|---|---|
+| T9.1 | PredictionFeedback ORM model | ✅ Done |
+| T9.2 | save_feedback() CRUD | ✅ Done |
+| T9.3 | Real /api/v1/feedback endpoint | ✅ Done |
+| T9.4 | .hidden CSS + SHAP section + feedback form in index.html | ✅ Done |
+| T9.5 | _renderShapChart() + _initFeedbackForm() in app.js | ✅ Done |
+| T9.6 | TestShapExplanation + test_feedback.py (≥119 tests total) | ✅ Done |
 
 ---
 

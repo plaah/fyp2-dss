@@ -403,6 +403,80 @@ function _renderResult(data, icd10Code, icd9Code, actualTariff, kelas) {
   // ── Show card ─────────────────────────────────────────────────────
   card.classList.remove('hidden');
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  _renderShapChart((data.prediction || {}).shap_explanation || []);
+  _initFeedbackForm((data.prediction || {}).predicted_cbg_code || '');
+}
+
+function _renderShapChart(shap) {
+    const section = document.getElementById('shap-section');
+    if (!section) return;
+    if (!shap || shap.length === 0) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    const top3   = shap.slice(0, 3);
+    const labels = top3.map(function(s) { return s.feature.replace(/_/g, ' '); });
+    const values = top3.map(function(s) { return s.impact; });
+    const colors = top3.map(function(s) { return s.direction === 'positive' ? '#16a34a' : '#dc2626'; });
+    if (typeof _shapChart !== 'undefined' && _shapChart) { _shapChart.destroy(); }
+    _shapChart = new Chart(document.getElementById('shap-chart'), {
+        type: 'bar',
+        data: { labels: labels, datasets: [{ data: values, backgroundColor: colors, borderRadius: 3 }] },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return ' Impact: ' + ctx.raw.toFixed(4); } } }
+            },
+            scales: {
+                x: { display: false },
+                y: { ticks: { font: { size: 11 } } }
+            }
+        }
+    });
+}
+
+function _initFeedbackForm(submittedCbg) {
+    const toggleBtn  = document.getElementById('feedback-toggle-btn');
+    const form       = document.getElementById('feedback-form');
+    const statusSpan = document.getElementById('feedback-status');
+    if (!toggleBtn || !form || !statusSpan) return;
+
+    form.classList.add('hidden');
+    statusSpan.style.display = 'none';
+    var ccbg = document.getElementById('feedback-correct-cbg');
+    var cnotes = document.getElementById('feedback-notes');
+    if (ccbg) ccbg.value = '';
+    if (cnotes) cnotes.value = '';
+
+    var freshToggle = toggleBtn.cloneNode(true);
+    toggleBtn.replaceWith(freshToggle);
+    freshToggle.addEventListener('click', function() { form.classList.toggle('hidden'); });
+
+    var submitBtn = document.getElementById('feedback-submit-btn');
+    var freshBtn  = submitBtn.cloneNode(true);
+    submitBtn.replaceWith(freshBtn);
+    freshBtn.addEventListener('click', function() {
+        var correctCbg = document.getElementById('feedback-correct-cbg').value.trim();
+        if (!correctCbg) { alert('Masukkan CBG yang benar terlebih dahulu.'); return; }
+        fetch('/api/v1/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prediction_id: null,
+                submitted_cbg: submittedCbg,
+                correct_cbg:   correctCbg,
+                is_correct:    false,
+                notes:         document.getElementById('feedback-notes').value.trim()
+            })
+        }).then(function() {
+            statusSpan.style.display = 'inline';
+            form.classList.add('hidden');
+        }).catch(function() {
+            alert('Gagal mengirim laporan. Coba lagi.');
+        });
+    });
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

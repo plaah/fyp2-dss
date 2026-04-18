@@ -310,3 +310,18 @@ def _safe_int(val) -> int:
         return int(float(str(val).replace(",", "").strip()))
     except (ValueError, TypeError):
         return 0
+
+
+def save_feedback(data: dict):
+    """Persist a doctor feedback report for an inaccurate prediction."""
+    from src.models.db_models import PredictionFeedback
+    fb = PredictionFeedback(
+        prediction_id = data.get('prediction_id'),
+        submitted_cbg = data.get('submitted_cbg', ''),
+        correct_cbg   = data['correct_cbg'],
+        is_correct    = data.get('is_correct', False),
+        notes         = data.get('notes', ''),
+    )
+    db.session.add(fb)
+    db.session.commit()
+    return fb

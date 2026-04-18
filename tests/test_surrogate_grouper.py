@@ -322,3 +322,59 @@ class TestSHAPExplanation:
             assert "direction" in item
             assert item["direction"] in {"positive", "negative"}
             assert isinstance(item["impact"], float)
+
+
+class TestShapExplanation:
+
+    def test_shap_explanation_key_present(self, grouper):
+        result = grouper.predict({
+            "primary_icd10": "I10",
+            "care_type":     "outp",
+            "entry_type":    "gp",
+            "kelas":         "kelas_3",
+        })
+        assert "shap_explanation" in result
+
+    def test_shap_explanation_is_list(self, grouper):
+        result = grouper.predict({
+            "primary_icd10": "J18.0",
+            "care_type":     "inp",
+            "kelas":         "kelas_3",
+        })
+        assert isinstance(result["shap_explanation"], list)
+
+    def test_shap_items_have_required_keys(self, grouper):
+        result = grouper.predict({
+            "primary_icd10": "E11.4",
+            "care_type":     "inp",
+            "entry_type":    "gp",
+            "kelas":         "kelas_3",
+        })
+        for item in result["shap_explanation"]:
+            assert "feature"   in item
+            assert "impact"    in item
+            assert "direction" in item
+
+    def test_shap_direction_values(self, grouper):
+        result = grouper.predict({
+            "primary_icd10": "K80.2",
+            "care_type":     "inp",
+            "kelas":         "kelas_2",
+        })
+        valid = {"positive", "negative"}
+        for item in result["shap_explanation"]:
+            assert item["direction"] in valid
+
+    def test_full_assessment_shap_in_response(self, client):
+        resp = client.post('/api/v1/full-assessment',
+                           json={
+                               "primary_icd10": "I10",
+                               "care_type":     "outp",
+                               "entry_type":    "gp",
+                               "kelas":         "kelas_3",
+                               "actual_tariff": 0,
+                           })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "shap_explanation" in data["prediction"]
+        assert isinstance(data["prediction"]["shap_explanation"], list)

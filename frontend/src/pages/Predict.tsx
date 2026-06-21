@@ -1,98 +1,86 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { BarChart, Bar, XAxis, YAxis, Cell, ResponsiveContainer, Tooltip } from "recharts"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
-import { runFullAssessment, searchIcd, submitFeedback, type FullAssessmentResponse, type IcdResult } from "@/lib/api"
+import { Icon } from "@/components/ui/icons"
+import { RiskPill } from "@/components/ui/RiskPill"
+import { NotionBadge } from "@/components/ui/notion-badge"
+import { ShapBar } from "@/components/ui/charts/ShapBar"
+import { runFullAssessment, searchIcd, type FullAssessmentResponse, type IcdResult } from "@/lib/api"
+import { MdcTooltip } from "@/components/predict/MdcTooltip"
+import { SeverityLabel } from "@/components/predict/SeverityLabel"
+import { ConfidenceBadge } from "@/components/predict/ConfidenceBadge"
+import { IcdCombinationAlert } from "@/components/predict/IcdCombinationAlert"
+import { AlternativeCbgPanel } from "@/components/predict/AlternativeCbgPanel"
+import { SecondaryAnalysisAlert } from "@/components/predict/SecondaryAnalysisAlert"
+import { FeedbackPanel } from "@/components/predict/FeedbackPanel"
+
+const fmtRp = (n: number | null | undefined) => n == null ? "—" : "Rp " + Number(n).toLocaleString("id-ID");
 
 interface SelectedIcd {
   code: string
   description: string
 }
 
-function IcdSearchField({
-  label,
-  placeholder,
-  type,
-  onSelect,
-}: {
-  label: string
-  placeholder: string
-  type: "diagnosis" | "procedure"
-  onSelect: (icd: SelectedIcd | null) => void
-}) {
-  const [query, setQuery] = useState("")
-  const [results, setResults] = useState<IcdResult[]>([])
-  const [selected, setSelected] = useState<SelectedIcd | null>(null)
-  const [loading, setLoading] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+function IcdSearch({ label, note, placeholder, type, onSelect }: { label?: string, note?: string, placeholder: string, type: "diagnosis" | "procedure", onSelect: (icd: SelectedIcd | null) => void }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<IcdResult[]>([]);
+  const [selected, setSelected] = useState<SelectedIcd | null>(null);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const search = useCallback(async (q: string) => {
-    if (!q || q.length < 2) { setResults([]); return }
-    setLoading(true)
+  const search = useCallback(async (query: string) => {
+    if (!query || query.length < 2) { setResults([]); setOpen(false); return }
+    setLoading(true);
     try {
-      const data = await searchIcd(q, type)
-      setResults(data.slice(0, 6))
+      const data = await searchIcd(query, type);
+      setResults(data.slice(0, 6));
+      setOpen(true);
     } catch {
-      setResults([])
+      setResults([]);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [type])
+  }, [type]);
 
   useEffect(() => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => search(query), 300)
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!selected && q) timerRef.current = setTimeout(() => search(q), 300);
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
-  }, [query, search])
+  }, [q, search, selected]);
 
   const pick = (r: IcdResult) => {
-    const item = { code: r.code, description: r.description }
-    setSelected(item)
-    onSelect(item)
-    setQuery("")
-    setResults([])
-  }
+    const item = { code: r.code, description: r.description };
+    setSelected(item); onSelect(item); setQ(""); setOpen(false);
+  };
+  const clear = () => { setSelected(null); onSelect(null); setQ(""); };
 
-  const clear = () => {
-    setSelected(null)
-    onSelect(null)
-    setQuery("")
-    setResults([])
-  }
+  const inputStyle = { width: "100%", padding: "9px 12px", border: "1px solid rgba(0,0,0,0.12)", borderRadius: "var(--radius-btn)", fontSize: 14, outline: "none", background: "var(--white)", color: "var(--near-black)", fontFamily: "Inter,sans-serif", lineHeight: 1.5, transition: "border-color .12s,box-shadow .12s" };
 
   return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
+    <div>
+      {label && <label style={{ fontSize: 13, fontWeight: 500, color: "var(--near-black)", display: "block", marginBottom: 6 }}>{label}{note && <span style={{ fontWeight: 400, color: "var(--gray-300)", marginLeft: 5, fontSize: 12 }}>{note}</span>}</label>}
       {selected ? (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 text-primary border border-primary/20 px-3 py-1 text-sm font-medium">
-            {selected.code} · {selected.description.slice(0, 40)}{selected.description.length > 40 ? "…" : ""}
-            <button onClick={clear} className="ml-1 text-primary/60 hover:text-primary font-bold">×</button>
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--blue)", borderRadius: "var(--radius-btn)", padding: "8px 12px", background: "var(--blue-badge-bg)" }}>
+          <Icon name="tag" size={13} color="var(--blue)" strokeWidth={2} />
+          <span style={{ fontFamily: "JetBrains Mono,monospace", fontWeight: 600, fontSize: 13, color: "var(--blue)" }}>{selected.code}</span>
+          <span style={{ fontSize: 12, color: "var(--gray-500)", flex: 1 }}>— {selected.description.slice(0, 44)}{selected.description.length > 44 ? "…" : ""}</span>
+          <button onClick={clear} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--gray-300)", padding: 2, display: "flex", borderRadius: 3 }}>
+            <Icon name="x" size={13} strokeWidth={2} />
+          </button>
         </div>
       ) : (
-        <div className="relative">
-          <Input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder={placeholder}
-          />
-          {(results.length > 0 || loading) && (
-            <div className="absolute z-10 top-full mt-1 w-full bg-popover border rounded-md shadow-lg overflow-hidden">
-              {loading && <div className="px-3 py-2 text-sm text-muted-foreground">Mencari...</div>}
+        <div style={{ position: "relative" }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder={placeholder} style={inputStyle}
+            onFocus={e => { e.target.style.borderColor = "var(--blue)"; e.target.style.boxShadow = "0 0 0 2px rgba(0,117,222,0.12)"; if(results.length>0) setOpen(true); }}
+            onBlur={e => { e.target.style.borderColor = "rgba(0,0,0,0.12)"; e.target.style.boxShadow = "none"; setTimeout(() => setOpen(false), 150) }} />
+          {open && (
+            <div style={{ position: "absolute", zIndex: 200, top: "calc(100% + 4px)", left: 0, right: 0, background: "var(--white)", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 8, boxShadow: "var(--shadow-deep)", overflow: "hidden" }}>
+              {loading && <div style={{ padding: "9px 13px", fontSize: 12, color: "var(--gray-500)" }}>Mencari...</div>}
               {results.map(r => (
-                <button
-                  key={r.code}
-                  onClick={() => pick(r)}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors border-b last:border-0"
-                >
-                  <span className="font-mono text-primary font-medium">{r.code}</span>
-                  <span className="text-muted-foreground ml-2">{r.description}</span>
+                <button key={r.code} onMouseDown={() => pick(r)} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 13px", background: "none", border: "none", cursor: "pointer", borderBottom: "1px solid rgba(0,0,0,0.05)", fontSize: 13, fontFamily: "Inter,sans-serif", transition: "background .08s" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "var(--blue-badge-bg)"}
+                  onMouseLeave={e => e.currentTarget.style.background = "none"}>
+                  <span style={{ fontFamily: "JetBrains Mono,monospace", color: "var(--blue)", fontWeight: 600, marginRight: 10, fontSize: 12 }}>{r.code}</span>
+                  <span style={{ color: "var(--gray-500)" }}>{r.description}</span>
                 </button>
               ))}
             </div>
@@ -100,284 +88,280 @@ function IcdSearchField({
         </div>
       )}
     </div>
-  )
+  );
 }
 
-function RiskBadge({ risk }: { risk: string }) {
-  const level = (risk || "").toUpperCase()
-  if (level === "LOW")  return <Badge variant="success">LOW Risk</Badge>
-  if (level === "HIGH") return <Badge variant="destructive">HIGH Risk</Badge>
-  return <Badge variant="warning">MEDIUM Risk</Badge>
-}
-
-function LookupBadge({ method }: { method: string }) {
-  if (method === "exact")   return <Badge variant="success">Exact Match</Badge>
-  if (method === "none")    return <Badge variant="destructive">No Match</Badge>
-  return <Badge variant="warning">Fallback</Badge>
-}
-
-function formatRp(n: number | undefined | null) {
-  if (n == null) return "—"
-  return "Rp " + n.toLocaleString("id-ID")
-}
+const SelectF = ({ label, value, onChange, options }: { label: string, value: string, onChange: (v: string) => void, options: { v: string, l: string }[] }) => (
+  <div>
+    <label style={{ fontSize: 13, fontWeight: 500, color: "var(--near-black)", display: "block", marginBottom: 6 }}>{label}</label>
+    <select value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", padding: "9px 12px", border: "1px solid rgba(0,0,0,0.12)", borderRadius: "var(--radius-btn)", fontSize: 14, outline: "none", background: "var(--white)", color: "var(--near-black)", cursor: "pointer", fontFamily: "Inter,sans-serif", WebkitAppearance:"none", MozAppearance:"none", appearance:"none" }}>
+      {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+    </select>
+  </div>
+);
 
 export default function Predict() {
-  const [diagIcd, setDiagIcd] = useState<SelectedIcd | null>(null)
-  const [procIcd, setProcIcd] = useState<SelectedIcd | null>(null)
-  const [careType, setCareType] = useState("outp")
-  const [kelas, setKelas] = useState("kelas_3")
-  const [actualTariff, setActualTariff] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<FullAssessmentResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  // Feedback state
-  const [fbOpen, setFbOpen] = useState(false)
-  const [fbCbg, setFbCbg] = useState("")
-  const [fbNotes, setFbNotes] = useState("")
-  const [fbSent, setFbSent] = useState(false)
+  const [diagIcd, setDiagIcd] = useState<SelectedIcd | null>(null);
+  const [secondaryDiags, setSecondaryDiags] = useState<SelectedIcd[]>([]);
+  const [procedures, setProcedures] = useState<SelectedIcd[]>([]);
+  const [secSlots, setSecSlots] = useState(0);
+  const [procSlots, setProcSlots] = useState(1);
+  const [careType, setCareType] = useState("outp");
+  const [kelas, setKelas] = useState("kelas_3");
+  const [tariff, setTariff] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<FullAssessmentResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
-    if (!diagIcd) { setError("Pilih diagnosis terlebih dahulu."); return }
-    setError(null)
-    setLoading(true)
-    setResult(null)
-    setFbOpen(false)
-    setFbSent(false)
+    if (!diagIcd) { setError("Pilih diagnosis utama terlebih dahulu."); return; }
+    setError(null); setLoading(true); setResult(null);
     try {
       const payload = {
-        primary_icd10:   diagIcd.code,
-        icd9_procedure:  procIcd?.code ?? "",
-        inacbg_icd10:    diagIcd.code,
-        care_type:       careType,
-        entry_type:      careType === "outp" ? "gp" : "sp",
+        primary_icd10: diagIcd.code,
+        secondary_icd10: secondaryDiags.map(d => d?.code).filter(Boolean),
+        icd9_procedures: procedures.map(p => p?.code).filter(Boolean),
+        inacbg_icd10: diagIcd.code,
+        care_type: careType,
+        entry_type: careType === "outp" ? "gp" : "sp",
         kelas,
-        episodes:        1,
-        actual_tariff:   parseFloat(actualTariff) || 0,
+        episodes: 1,
+        actual_tariff: parseFloat(tariff) || 0,
       }
-      const data = await runFullAssessment(payload)
-      setResult(data)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Gagal menghubungi server.")
+      const data = await runFullAssessment(payload);
+      setResult(data);
+    } catch (e: any) {
+      setError(e.message || "Gagal menghubungi server.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
-  const handleFeedback = async () => {
-    if (!fbCbg.trim()) return
-    try {
-      await submitFeedback({
-        prediction_id:  null,
-        submitted_cbg:  result?.prediction?.predicted_cbg_code ?? "",
-        correct_cbg:    fbCbg.trim(),
-        is_correct:     false,
-        notes:          fbNotes,
-      })
-      setFbSent(true)
-      setFbOpen(false)
-    } catch {
-      /* silent */
-    }
-  }
-
-  const pred  = result?.prediction
-  const fin   = result?.financial
-  const rec   = result?.recommendation
-  const isOver = (fin?.financial_gap ?? 0) > 0
+  const pred = result?.prediction;
+  const fin = result?.financial;
+  const rec = result?.recommendation;
+  const isOver = (fin?.financial_gap ?? 0) > 0;
 
   const shapData = (pred?.shap_explanation ?? []).map(s => ({
     feature: s.feature.replace(/_/g, " "),
-    impact:  Math.abs(s.impact),
+    rawKey: s.feature,
+    impact: Math.abs(s.impact),
     direction: s.direction,
-  }))
+  }));
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Prediction Tool</h1>
-        <p className="text-muted-foreground text-sm mt-1">Prediksi CBG &amp; Tarif BPJS sebelum koding Casemix</p>
+    <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 20, alignItems: "start", animation: "fadeUp .3s ease" }}>
+      {/* INPUT FORM */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <NotionBadge>Alat Prediksi Klinis</NotionBadge>
+          </div>
+          <h1 style={{ fontSize: 28, fontWeight: 700, color: "var(--near-black)", letterSpacing: "-0.75px", lineHeight: 1.1 }}>Prediksi CBG & Tarif</h1>
+          <p style={{ fontSize: 14, color: "var(--gray-500)", marginTop: 6, lineHeight: 1.5 }}>Masukkan data klinis untuk mendapat prediksi kode INA-CBGs dan estimasi tarif BPJS</p>
+        </div>
+
+        {/* Form card */}
+        <div style={{ background: "var(--white)", borderRadius: "var(--radius-card)", border: "1px solid var(--border-color)", boxShadow: "var(--shadow-card)", overflow: "hidden" }}>
+          <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid var(--border-color)", background: "var(--warm-white)", display: "flex", alignItems: "center", gap: 10 }}>
+            <Icon name="file" size={15} color="var(--gray-500)" strokeWidth={2} />
+            <p style={{ fontWeight: 600, fontSize: 14, color: "var(--near-black)" }}>Data Klinis Pasien</p>
+          </div>
+          <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <IcdSearch label="Diagnosis Utama (ICD-10)" note="*Wajib" placeholder="Ketik kode atau nama — contoh: J18.9, pneumonia…" type="diagnosis" onSelect={setDiagIcd} />
+
+            {Array.from({ length: secSlots }).map((_, idx) => (
+              <div key={`s${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}>
+                  <IcdSearch label={idx === 0 ? "Diagnosis Sekunder" : ""} placeholder={`Diagnosis sekunder ${idx + 1}…`} type="diagnosis" onSelect={(icd) => {
+                    setSecondaryDiags(prev => { const next = [...prev]; if (icd) { next[idx] = icd; } else { next.splice(idx, 1); } return next; });
+                  }} />
+                </div>
+                <button onClick={() => { setSecSlots(n => n - 1); setSecondaryDiags(prev => prev.filter((_, i) => i !== idx)); }} style={{ padding: "9px", border: "1px solid rgba(0,0,0,0.1)", borderRadius: "var(--radius-btn)", background: "none", cursor: "pointer", color: "var(--gray-300)", display: "flex", marginBottom: 0 }}>
+                  <Icon name="x" size={13} strokeWidth={2} />
+                </button>
+              </div>
+            ))}
+            {secSlots < 4 && (
+              <button onClick={() => setSecSlots(n => n + 1)} style={{ display: "flex", alignItems: "center", gap: 7, background: "none", border: "1px dashed rgba(0,0,0,0.15)", borderRadius: "var(--radius-btn)", padding: "7px 12px", fontSize: 13, color: "var(--gray-300)", cursor: "pointer", fontFamily: "Inter,sans-serif", transition: "all .12s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.color = "var(--blue)" }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(0,0,0,0.15)"; e.currentTarget.style.color = "var(--gray-300)" }}>
+                <Icon name="plus" size={13} strokeWidth={2} />
+                Tambah diagnosis sekunder {secSlots > 0 ? `(${secSlots}/4)` : ""}
+              </button>
+            )}
+
+            <div style={{ borderTop: "1px solid rgba(0,0,0,0.07)", paddingTop: 14 }}>
+              {Array.from({ length: procSlots }).map((_, idx) => (
+                <div key={`p${idx}`} style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <IcdSearch label={idx === 0 ? "Prosedur (ICD-9-CM)" : ""} note={idx === 0 ? "Opsional" : ""} placeholder={`Prosedur ${idx + 1} — contoh: 88.72, hemodialisis…`} type="procedure" onSelect={(icd) => {
+                      setProcedures(prev => { const next = [...prev]; if (icd) { next[idx] = icd; } else { next.splice(idx, 1); } return next; });
+                    }} />
+                  </div>
+                  {procSlots > 1 && <button onClick={() => { setProcSlots(n => n - 1); setProcedures(prev => prev.filter((_, i) => i !== idx)); }} style={{ padding: "9px", border: "1px solid rgba(0,0,0,0.1)", borderRadius: "var(--radius-btn)", background: "none", cursor: "pointer", color: "var(--gray-300)", display: "flex" }}>
+                    <Icon name="x" size={13} strokeWidth={2} />
+                  </button>}
+                </div>
+              ))}
+              {procSlots < 5 && (
+                <button onClick={() => setProcSlots(n => n + 1)} style={{ display: "flex", alignItems: "center", gap: 7, background: "none", border: "1px dashed rgba(0,0,0,0.15)", borderRadius: "var(--radius-btn)", padding: "7px 12px", fontSize: 13, color: "var(--gray-300)", cursor: "pointer", fontFamily: "Inter,sans-serif", transition: "all .12s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.color = "var(--blue)" }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(0,0,0,0.15)"; e.currentTarget.style.color = "var(--gray-300)" }}>
+                  <Icon name="plus" size={13} strokeWidth={2} />
+                  Tambah prosedur ({procSlots}/5)
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <SelectF label="Jenis Rawat" value={careType} onChange={setCareType} options={[{ v: "outp", l: "Rawat Jalan" }, { v: "inp", l: "Rawat Inap" }, { v: "emd", l: "UGD / Gawat Darurat" }]} />
+              <SelectF label="Kelas" value={kelas} onChange={setKelas} options={[{ v: "kelas_1", l: "Kelas 1" }, { v: "kelas_2", l: "Kelas 2" }, { v: "kelas_3", l: "Kelas 3" }]} />
+            </div>
+
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 500, color: "var(--near-black)", display: "block", marginBottom: 6 }}>Tarif Diajukan (Rp) <span style={{ fontWeight: 400, color: "var(--gray-300)", fontSize: 12 }}>Opsional</span></label>
+              <input type="number" value={tariff} onChange={e => setTariff(e.target.value)} placeholder="contoh: 1960000"
+                style={{ width: "100%", padding: "9px 12px", border: "1px solid rgba(0,0,0,0.12)", borderRadius: "var(--radius-btn)", fontSize: 14, outline: "none", background: "var(--white)", color: "var(--near-black)", fontFamily: "JetBrains Mono,monospace", transition: "border-color .12s,box-shadow .12s" }}
+                onFocus={e => { e.target.style.borderColor = "var(--blue)"; e.target.style.boxShadow = "0 0 0 2px rgba(0,117,222,0.12)" }}
+                onBlur={e => { e.target.style.borderColor = "rgba(0,0,0,0.12)"; e.target.style.boxShadow = "none" }} />
+            </div>
+
+            {error && <div style={{ background: "#fde8e8", border: "1px solid rgba(192,57,43,0.2)", borderRadius: "var(--radius-btn)", padding: "9px 13px", fontSize: 13, color: "#c0392b", display: "flex", gap: 8, alignItems: "center" }}>
+              <Icon name="alert" size={14} color="#c0392b" strokeWidth={2} />{error}
+            </div>}
+
+            <button onClick={handleSubmit} disabled={loading} style={{ width: "100%", padding: "11px", borderRadius: "var(--radius-btn)", border: "none", background: loading ? "rgba(0,0,0,0.08)" : "var(--blue)", color: loading ? "var(--gray-300)" : "white", fontSize: 14, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer", transition: "all .12s", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+              onMouseEnter={e => { if (!loading) e.currentTarget.style.background = "var(--blue-hover)" }}
+              onMouseLeave={e => { if (!loading) e.currentTarget.style.background = "var(--blue)" }}>
+              {loading ? <><div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "white", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />Memproses…</> : <><Icon name="send" size={14} color="white" strokeWidth={2} />Prediksi CBG & Tarif</>}
+            </button>
+          </div>
+        </div>
+
+        {/* Guide */}
+        <div style={{ background: "var(--warm-white)", borderRadius: "var(--radius-card)", border: "1px solid var(--border-color)", padding: "14px 18px" }}>
+          <p style={{ fontSize: 12, fontWeight: 600, color: "var(--near-black)", marginBottom: 10, display: "flex", alignItems: "center", gap: 7 }}>
+            <Icon name="info" size={13} color="var(--gray-500)" strokeWidth={2} />
+            Panduan Level Risiko
+          </p>
+          {[
+            { r: "LOW", l: "Proses Normal — tarif dalam plafon", c: "#1a7a4a", b: "#e8f7ef", d: "#1aae39" },
+            { r: "MEDIUM", l: "Verifikasi Koding Sebelum Submit", c: "#b45309", b: "#fff4e6", d: "#dd5b00" },
+            { r: "HIGH", l: "Review Dokumen Pendukung", c: "#c0392b", b: "#fde8e8", d: "#e53e3e" },
+            { r: "CRITICAL", l: "Eskalasi ke Supervisor", c: "#7f1d1d", b: "#fee2e2", d: "#7f1d1d" },
+          ].map(r => (
+            <div key={r.r} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7 }}>
+              <span style={{ background: r.b, color: r.c, fontSize: 10, fontWeight: 700, padding: "2px 9px", borderRadius: 9999, minWidth: 64, textAlign: "center", letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: r.d, flexShrink: 0 }} />
+                {r.r}
+              </span>
+              <span style={{ fontSize: 12, color: "var(--gray-500)" }}>{r.l}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Input Form */}
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">Data Klinis</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <IcdSearchField
-            label="Diagnosis Utama (ICD-10)"
-            placeholder="Ketik diagnosis — contoh: hipertensi, pneumonia..."
-            type="diagnosis"
-            onSelect={setDiagIcd}
-          />
-
-          <IcdSearchField
-            label="Prosedur (ICD-9-CM) — opsional"
-            placeholder="Ketik prosedur — contoh: tensi, nebulisasi, TURP..."
-            type="procedure"
-            onSelect={setProcIcd}
-          />
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>Jenis Rawat</Label>
-              <Select value={careType} onValueChange={setCareType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="outp">Rawat Jalan</SelectItem>
-                  <SelectItem value="inp">Rawat Inap</SelectItem>
-                  <SelectItem value="emd">UGD / Gawat Darurat</SelectItem>
-                </SelectContent>
-              </Select>
+      {/* RESULT PANEL */}
+      <div>
+        {!result && !loading && (
+          <div style={{ background: "var(--warm-white)", borderRadius: "var(--radius-lg)", border: "1px dashed rgba(0,0,0,0.12)", padding: "60px 40px", textAlign: "center" }}>
+            <div style={{ width: 56, height: 56, borderRadius: 14, background: "var(--blue-badge-bg)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+              <Icon name="brain" size={26} color="var(--blue)" strokeWidth={1.5} />
             </div>
-            <div className="space-y-1.5">
-              <Label>Kelas Perawatan</Label>
-              <Select value={kelas} onValueChange={setKelas}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="kelas_1">Kelas 1</SelectItem>
-                  <SelectItem value="kelas_2">Kelas 2</SelectItem>
-                  <SelectItem value="kelas_3">Kelas 3</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Tarif yang Diajukan (Rp)</Label>
-            <Input
-              type="number"
-              placeholder="contoh: 196100"
-              value={actualTariff}
-              onChange={e => setActualTariff(e.target.value)}
-            />
-          </div>
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
-
-          <Button onClick={handleSubmit} disabled={loading} className="w-full">
-            {loading ? "Memproses..." : "Prediksi CBG & Tarif →"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Result */}
-      {result && pred && fin && rec && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-widest mb-1">CBG Terprediksi</p>
-                <h2 className="text-4xl font-bold text-primary font-mono tracking-wide">{pred.predicted_cbg_code || "—"}</h2>
-                <p className="text-sm text-muted-foreground mt-1">{pred.predicted_cbg_description || ""}</p>
-              </div>
-              <RiskBadge risk={fin.risk_level} />
-            </div>
-
-            <div className="flex flex-wrap gap-1.5 mt-3">
-              <Badge variant="outline">MDC: {pred.predicted_mdc}</Badge>
-              <Badge variant="outline">Severity: {pred.predicted_severity}</Badge>
-              <LookupBadge method={pred.lookup_method} />
-              <Badge variant="secondary">MDC {Math.round((pred.mdc_confidence ?? 0) * 100)}%</Badge>
-              <Badge variant="secondary">Sev {Math.round((pred.severity_confidence ?? 0) * 100)}%</Badge>
-            </div>
-          </CardHeader>
-
-          <CardContent className="space-y-4">
-            <Separator />
-
-            {/* Financial metrics */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground mb-1">Tarif Dasar BPJS</p>
-                <p className="text-lg font-semibold">{formatRp(pred.predicted_base_tariff)}</p>
-              </div>
-              <div className={`rounded-lg border p-3 ${isOver ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}>
-                <p className="text-xs text-muted-foreground mb-1">Status Tarif</p>
-                <p className={`text-lg font-semibold ${isOver ? "text-amber-700" : "text-emerald-700"}`}>
-                  {isOver ? `⚠ Selisih ${formatRp(fin.financial_gap)}` : "✓ Dalam Plafon"}
-                </p>
-              </div>
-            </div>
-
-            {/* Recommendation */}
-            {rec.summary && (
-              <div className="rounded-lg bg-muted/50 px-4 py-3">
-                <p className="text-xs text-muted-foreground mb-1 font-medium uppercase tracking-wide">Rekomendasi</p>
-                <p className="text-sm">{rec.summary}</p>
-              </div>
-            )}
-
-            {/* SHAP chart */}
-            {shapData.length > 0 && (
-              <>
-                <Separator />
-                <div>
-                  <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wide">Faktor Penentu Prediksi MDC</p>
-                  <ResponsiveContainer width="100%" height={90}>
-                    <BarChart data={shapData} layout="vertical" margin={{ left: 0, right: 16, top: 0, bottom: 0 }}>
-                      <XAxis type="number" hide />
-                      <YAxis type="category" dataKey="feature" width={110} tick={{ fontSize: 11 }} />
-                      <Tooltip contentStyle={{ fontSize: 12 }} />
-                      <Bar dataKey="impact" radius={[0, 3, 3, 0]}>
-                        {shapData.map((s, i) => (
-                          <Cell key={i} fill={s.direction === "positive" ? "#16a34a" : "#dc2626"} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+            <p style={{ fontSize: 20, fontWeight: 700, color: "var(--near-black)", letterSpacing: "-0.25px", marginBottom: 8 }}>Siap Memprediksi</p>
+            <p style={{ fontSize: 14, color: "var(--gray-500)", maxWidth: 320, margin: "0 auto", lineHeight: 1.6 }}>Isi data klinis di panel kiri, lalu klik tombol Prediksi untuk melihat hasil analisis CBG, tarif, dan rekomendasi klinis.</p>
+            <div style={{ marginTop: 28, display: "flex", flexDirection: "column", gap: 7, alignItems: "center" }}>
+              {["Prediksi kode INA-CBGs", "Estimasi tarif BPJS", "Analisis risiko finansial", "Penjelasan AI (SHAP values)", "Rekomendasi tindakan klinis"].map(f => (
+                <div key={f} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Icon name="check" size={13} color="var(--teal)" strokeWidth={2.5} />
+                  <span style={{ fontSize: 13, color: "var(--gray-500)" }}>{f}</span>
                 </div>
-              </>
-            )}
+              ))}
+            </div>
+          </div>
+        )}
 
-            {/* Feedback */}
-            <Separator />
-            {fbSent ? (
-              <p className="text-sm text-emerald-600">✓ Laporan diterima — terima kasih.</p>
-            ) : (
-              <div>
-                <button
-                  onClick={() => setFbOpen(o => !o)}
-                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                >
-                  Hasil tidak akurat? Laporkan {fbOpen ? "▴" : "▾"}
-                </button>
-                {fbOpen && (
-                  <div className="mt-3 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label className="shrink-0 text-xs">CBG yang benar:</Label>
-                      <Input
-                        value={fbCbg}
-                        onChange={e => setFbCbg(e.target.value)}
-                        placeholder="contoh: Q-5-44-0"
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Label className="shrink-0 text-xs">Catatan:</Label>
-                      <Input
-                        value={fbNotes}
-                        onChange={e => setFbNotes(e.target.value)}
-                        placeholder="alasan (opsional)"
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <Button size="sm" onClick={handleFeedback} disabled={!fbCbg.trim()}>
-                      Kirim Laporan
-                    </Button>
-                  </div>
-                )}
+        {loading && (
+          <div style={{ background: "var(--white)", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-color)", boxShadow: "var(--shadow-card)", padding: "60px 40px", textAlign: "center" }}>
+            <div style={{ width: 44, height: 44, border: "3px solid rgba(0,0,0,0.08)", borderTopColor: "var(--blue)", borderRadius: "50%", margin: "0 auto 20px", animation: "spin 0.9s linear infinite" }} />
+            <p style={{ fontSize: 16, fontWeight: 600, color: "var(--near-black)", letterSpacing: "-0.25px", marginBottom: 6 }}>Menganalisis data klinis…</p>
+            <p style={{ fontSize: 13, color: "var(--gray-500)" }}>Model ML sedang memproses kode ICD dan parameter perawatan</p>
+          </div>
+        )}
+
+        {result && pred && fin && rec && (
+          <div style={{ background: "var(--white)", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-color)", boxShadow: "var(--shadow-card)", overflow: "hidden", animation: "fadeUp .4s ease" }}>
+            <div style={{ padding: "24px 28px", borderBottom: "1px solid var(--border-color)" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12 }}>
+                <div>
+                  <p style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-300)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 4 }}>CBG Terprediksi</p>
+                  <h2 style={{ fontSize: 42, fontWeight: 700, color: "var(--blue)", fontFamily: "JetBrains Mono,monospace", letterSpacing: "-1.5px", lineHeight: 1 }}>{pred.predicted_cbg_code || "—"}</h2>
+                  <p style={{ fontSize: 14, color: "var(--gray-500)", marginTop: 6, fontWeight: 500 }}>{pred.predicted_cbg_description || ""}</p>
+                </div>
+                <RiskPill risk={fin.risk_level} size="lg" />
               </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 16 }}>
+                <MdcTooltip mdc={pred.predicted_mdc} />
+                <SeverityLabel severity={pred.predicted_severity} />
+                <ConfidenceBadge confidence={pred.mdc_confidence ?? 0} label="MDC" />
+                <ConfidenceBadge confidence={pred.severity_confidence ?? 0} label="Sev" />
+              </div>
+
+              {pred.combination_rarity != null && (
+                <div style={{ marginTop: 12 }}>
+                  <IcdCombinationAlert rarity={pred.combination_rarity} />
+                </div>
+              )}
+
+              {pred.secondary_analysis && (
+                <div style={{ marginTop: 12 }}>
+                  <SecondaryAnalysisAlert analysis={pred.secondary_analysis} currentSeverity={pred.predicted_severity_label} />
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: "24px 28px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+                <div style={{ border: "1px solid var(--border-color)", borderRadius: "var(--radius-card)", padding: "16px" }}>
+                  <p style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-300)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 4 }}>Tarif Dasar BPJS</p>
+                  <p style={{ fontSize: 20, fontWeight: 700, color: "var(--near-black)" }}>{fmtRp(pred.predicted_base_tariff)}</p>
+                </div>
+                <div style={{ border: isOver ? "1px solid rgba(221,91,0,0.3)" : "1px solid rgba(26,174,57,0.3)", borderRadius: "var(--radius-card)", padding: "16px", background: isOver ? "#fff4e6" : "#e8f7ef" }}>
+                  <p style={{ fontSize: 11, fontWeight: 600, color: isOver ? "#b45309" : "#1a7a4a", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 4 }}>Status Tarif</p>
+                  <p style={{ fontSize: 20, fontWeight: 700, color: isOver ? "#c0392b" : "#1a7a4a" }}>{isOver ? `⚠ Selisih ${fmtRp(fin.financial_gap)}` : "✓ Dalam Plafon"}</p>
+                </div>
+              </div>
+
+              {rec.summary && (
+                <div style={{ background: "var(--warm-white)", borderRadius: "var(--radius-card)", padding: "16px", marginBottom: 24, border: "1px solid var(--border-color)" }}>
+                  <p style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-500)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>Rekomendasi Tindakan</p>
+                  <p style={{ fontSize: 14, color: "var(--near-black)", lineHeight: 1.5 }}>{rec.summary}</p>
+                </div>
+              )}
+
+              {pred.alternative_cbgs && (
+                <div style={{ marginBottom: 24 }}>
+                  <AlternativeCbgPanel alternatives={pred.alternative_cbgs} confidence={pred.mdc_confidence ?? 0} lookupMethod={pred.lookup_method} />
+                </div>
+              )}
+
+              {shapData.length > 0 && (
+                <div>
+                  <p style={{ fontSize: 11, fontWeight: 600, color: "var(--gray-300)", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12, borderTop: "1px solid var(--border-color)", paddingTop: 20 }}>Penjelasan Model (SHAP)</p>
+                  <ShapBar data={shapData} />
+                </div>
+              )}
+
+              <FeedbackPanel
+                predictedCbg={pred.predicted_cbg_code}
+                predictionId={null}
+              />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
-  )
+  );
 }

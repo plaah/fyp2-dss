@@ -378,3 +378,64 @@ class TestShapExplanation:
         data = resp.get_json()
         assert "shap_explanation" in data["prediction"]
         assert isinstance(data["prediction"]["shap_explanation"], list)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Sprint 11 Enhancements: B4 (Alternatives) & B5 (Rarity)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSprint11Features:
+
+    def test_combination_rarity_present(self, grouper):
+        """Result must contain combination_rarity as an integer."""
+        result = grouper.predict({
+            "primary_icd10": "J18.0",
+            "icd9_procedure": "89.09",
+            "care_type":     "inp",
+            "kelas":         "kelas_3",
+        })
+        assert "combination_rarity" in result
+        assert isinstance(result["combination_rarity"], int)
+        assert result["combination_rarity"] >= 0
+
+    def test_alternative_cbgs_present_and_structured(self, grouper):
+        """Result must contain alternative_cbgs list with proper keys."""
+        result = grouper.predict({
+            "primary_icd10": "I10",
+            "care_type":     "inp",
+            "kelas":         "kelas_3",
+        })
+        assert "alternative_cbgs" in result
+        assert isinstance(result["alternative_cbgs"], list)
+        # It can be empty if no fallbacks found, but usually should have items for common MDCs
+        if len(result["alternative_cbgs"]) > 0:
+            item = result["alternative_cbgs"][0]
+            assert "cbg_code" in item
+            assert "base_tariff" in item
+            assert "severity" in item
+            assert "severity_label" in item
+            assert "basis" in item
+            assert isinstance(item["base_tariff"], float)
+
+    def test_alternative_cbgs_limit(self, grouper):
+        """Alternative CBGs should be limited to at most 2 items."""
+        result = grouper.predict({
+            "primary_icd10": "I10",
+            "care_type":     "inp",
+            "kelas":         "kelas_3",
+        })
+        assert len(result["alternative_cbgs"]) <= 2
+
+    def test_full_assessment_api_has_new_fields(self, client):
+        """The main API endpoint must expose the new Sprint 11 fields."""
+        resp = client.post('/api/v1/full-assessment',
+                           json={
+                               "primary_icd10": "I10",
+                               "care_type":     "outp",
+                               "kelas":         "kelas_3",
+                               "actual_tariff": 0,
+                           })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        pred = data["prediction"]
+        assert "combination_rarity" in pred
+        assert "alternative_cbgs" in pred

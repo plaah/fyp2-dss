@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+.env.*
 venv/
 .venv/
 *.pkl
@@ -13,10 +14,18 @@ data/*.csv
 data/*.json
 notebooks/.ipynb_checkpoints/
 
-# IDE
+# Node / frontend build
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.local
+
+# IDE / editor junk
 .vscode/
 .idea/
 *.DS_Store
+*.save
+app.py.save
 
 # Flask
 instance/
@@ -24,3 +33,35 @@ instance/
 
 # PostgreSQL
 *.sql.bak
+
+# --- Non-essential for a public code repo ---
+# AI agent tooling & assistant config
+.claude/
+.antigravity/
+.superpowers/
+.agignore
+.gstack/
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+AI_CONTEXT.md
+graphify-out/
+
+# Personal "second brain" / notes
+brain/
+.obsidian/
+00-Home.md
+design-system/
+
+# Academic / competition / personal artifacts
+docs/
+PROJECT.md
+.Digitex-competition/
+pitch-script.md
+brand-spec.md
+design.tsx
+downloaded_design.html
+*.mp4
+poster-framed.pdf
+Aflakh-Rasikh-DIGITEX-Poster.jpg
+Demo*.html

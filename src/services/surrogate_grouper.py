@@ -123,6 +123,7 @@ class SurrogateGrouper:
         self._lookup         = None
         self._preproc        = None
         self._mdc_fi         = None   # feature importances fallback for SHAP
+        self._pair_counts    = {}     # (icd_block, icd9_proc) → count for B5 rarity
         self._loaded         = False
 
     # ── Lazy load ─────────────────────────────────────────────────────────────
@@ -141,10 +142,64 @@ class SurrogateGrouper:
                 self._mdc_clf.feature_importances_,
                 index=self._preproc['feature_cols']
             ).sort_values(ascending=False)
+            # B5: pair-count index for combination rarity detection
+            try:
+                train_path = os.path.join(BASE_DIR, "data", "clinical_training_data.csv")
+                train_df = pd.read_csv(train_path, usecols=['icd_block', 'idrg_icd9_procedure'])
+                train_df['idrg_icd9_procedure'] = train_df['idrg_icd9_procedure'].fillna('__none__')
+                self._pair_counts = (
+                    train_df.groupby(['icd_block', 'idrg_icd9_procedure'])
+                    .size()
+                    .to_dict()
+                )
+            except Exception:
+                self._pair_counts = {}
+
             self._loaded = True
             logger.info("SurrogateGrouper: models loaded successfully")
         except Exception as exc:
             logger.error(f"SurrogateGrouper: failed to load models — {exc}")
+            raise
+
+    def reload(self):
+        """Force reload of all model artifacts from disk atomically without downtime."""
+        try:
+            mdc_clf  = pickle.load(open(os.path.join(MODELS_DIR, "mdc_predictor.pkl"),        "rb"))
+            sev_clf  = pickle.load(open(os.path.join(MODELS_DIR, "severity_predictor.pkl"),   "rb"))
+            mdc_le   = pickle.load(open(os.path.join(MODELS_DIR, "mdc_label_encoder.pkl"),    "rb"))
+            sev_le   = pickle.load(open(os.path.join(MODELS_DIR, "severity_label_encoder.pkl"), "rb"))
+            lookup   = pickle.load(open(os.path.join(MODELS_DIR, "cbg_lookup_table.pkl"),     "rb"))
+            preproc  = pickle.load(open(os.path.join(MODELS_DIR, "surrogate_preprocessing.pkl"), "rb"))
+            mdc_fi   = pd.Series(
+                mdc_clf.feature_importances_,
+                index=preproc['feature_cols']
+            ).sort_values(ascending=False)
+            
+            try:
+                train_path = os.path.join(BASE_DIR, "data", "clinical_training_data.csv")
+                train_df = pd.read_csv(train_path, usecols=['icd_block', 'idrg_icd9_procedure'])
+                train_df['idrg_icd9_procedure'] = train_df['idrg_icd9_procedure'].fillna('__none__')
+                pair_counts = (
+                    train_df.groupby(['icd_block', 'idrg_icd9_procedure'])
+                    .size()
+                    .to_dict()
+                )
+            except Exception:
+                pair_counts = {}
+
+            # Atomic swap
+            self._mdc_clf  = mdc_clf
+            self._sev_clf  = sev_clf
+            self._mdc_le   = mdc_le
+            self._sev_le   = sev_le
+            self._lookup   = lookup
+            self._preproc  = preproc
+            self._mdc_fi   = mdc_fi
+            self._pair_counts = pair_counts
+            self._loaded   = True
+            logger.info("SurrogateGrouper: models reloaded atomically successfully")
+        except Exception as exc:
+            logger.error(f"SurrogateGrouper: failed to reload models — {exc}")
             raise
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -154,21 +209,33 @@ class SurrogateGrouper:
 
         Args:
             clinical_input: {
-                "primary_icd10": str,      # e.g. "I10"
-                "icd9_procedure": str,     # e.g. "89.09" (optional)
-                "inacbg_icd10": str,       # e.g. "I10" (optional, defaults to primary_icd10)
-                "care_type": str,          # "outp" | "inp" | "emd" | "gp"
-                "entry_type": str,         # "gp" | "outp" | "emd" | "inp" | ...
-                "kelas": str,              # "kelas_1" | "kelas_2" | "kelas_3"
-                "episodes": int,           # default 1
+                "primary_icd10": str,          # e.g. "I10"
+                "icd9_procedure": str,         # e.g. "89.09" (optional, legacy single)
+                "icd9_procedures": list[str],   # e.g. ["89.09", "39.95"] (optional, multi)
+                "secondary_icd10": list[str],   # e.g. ["E11.9", "I10"] (optional)
+                "inacbg_icd10": str,           # e.g. "I10" (optional, defaults to primary_icd10)
+                "care_type": str,              # "outp" | "inp" | "emd" | "gp"
+                "entry_type": str,             # "gp" | "outp" | "emd" | "inp" | ...
+                "kelas": str,                  # "kelas_1" | "kelas_2" | "kelas_3"
+                "episodes": int,               # default 1
             }
 
         Returns:
             Prediction dict with CBG code, tariff, MDC/severity predictions,
-            confidence scores, lookup method, and SHAP explanation.
+            confidence scores, lookup method, SHAP explanation, and multi-code analysis.
         """
         self._load()
         try:
+            # ── Extract multi-code inputs (backward-compatible) ───────────
+            secondary_icd10 = [s.strip().upper() for s in clinical_input.get('secondary_icd10', []) if s and s.strip()]
+            icd9_procedures = [s.strip().upper() for s in clinical_input.get('icd9_procedures', []) if s and s.strip()]
+            # Legacy single icd9_procedure fallback
+            if not icd9_procedures:
+                single_proc = str(clinical_input.get('icd9_procedure', '') or '').strip().upper()
+                if single_proc and single_proc != 'NAN':
+                    icd9_procedures = [single_proc]
+
+            # ── Core ML prediction: uses primary_icd10 + first procedure ──
             features_df = self._derive_features(clinical_input)
             mdc_letter, mdc_conf   = self._predict_mdc(features_df)
             severity,   sev_conf   = self._predict_severity(features_df)
@@ -177,14 +244,32 @@ class SurrogateGrouper:
             kelas        = features_df['kelas_raw'].iloc[0]
 
             # Apply deterministic chapter → MDC rule to correct model errors
+            primary_icd = str(clinical_input.get('primary_icd10', '') or '').strip().upper()
             mdc_letter, mdc_source = self._apply_chapter_rule(
-                mdc_letter, mdc_conf,
-                str(clinical_input.get('primary_icd10', '') or '').strip().upper()
+                mdc_letter, mdc_conf, primary_icd
             )
 
             cbg_info     = self._lookup_cbg(icd_block, care_type_s, kelas, severity, mdc_letter)
             base_tariff  = cbg_info.get('base_tariff', 0.0)
             shap_exp     = self._get_shap_explanation(features_df)
+
+            # B5: combination rarity (min rarity across all primary × procedure pairs)
+            if icd9_procedures:
+                rarities = []
+                for proc in icd9_procedures:
+                    proc_key = proc if proc and proc not in ('', 'NAN') else '__none__'
+                    rarities.append(int(self._pair_counts.get((icd_block, proc_key), 0)))
+                combination_rarity = min(rarities) if rarities else 0
+            else:
+                combination_rarity = int(self._pair_counts.get((icd_block, '__none__'), 0))
+
+            # ── Multi-code enrichment ─────────────────────────────────────
+            secondary_analysis = self._analyze_secondary_diagnoses(
+                primary_icd, secondary_icd10, mdc_letter, severity
+            )
+            procedure_analysis = self._analyze_procedures(
+                primary_icd, icd9_procedures
+            )
 
             return {
                 "predicted_mdc":              mdc_letter,
@@ -200,6 +285,12 @@ class SurrogateGrouper:
                 "lookup_method":              cbg_info.get('lookup_method', 'none'),
                 "mdc_source":                 mdc_source,
                 "shap_explanation":           shap_exp,
+                "combination_rarity":         combination_rarity,
+                "alternative_cbgs":           self._get_alternatives(mdc_letter, severity, kelas),
+                "secondary_diagnoses":        secondary_icd10,
+                "procedures":                 icd9_procedures,
+                "secondary_analysis":         secondary_analysis,
+                "procedure_analysis":         procedure_analysis,
                 "status":                     "success",
             }
         except Exception as exc:
@@ -359,6 +450,53 @@ class SurrogateGrouper:
             'lookup_method': 'none',
         }
 
+    # ── B4: Alternative CBG suggestions ──────────────────────────────────────
+    def _get_alternatives(self, mdc_letter: str, severity: str, kelas: str) -> list:
+        """Return up to 2 alternative CBGs by varying severity (adjacent first)."""
+        all_severities = ['0', 'I', 'II', 'III']
+        try:
+            current_idx = all_severities.index(severity)
+        except ValueError:
+            return []
+
+        # Adjacent severities first (up then down), then fill remaining
+        candidates = []
+        if current_idx + 1 < len(all_severities):
+            candidates.append(all_severities[current_idx + 1])
+        if current_idx - 1 >= 0:
+            candidates.append(all_severities[current_idx - 1])
+        for s in all_severities:
+            if s != severity and s not in candidates:
+                candidates.append(s)
+
+        kelas_key = kelas if kelas.startswith('kelas_') else f'kelas_{kelas}'
+        fb1 = self._lookup.get('fallback_mdc_sev_kelas', {})
+        fb2 = self._lookup.get('fallback_mdc_sev', {})
+
+        alternatives = []
+        for alt_sev in candidates:
+            if len(alternatives) >= 2:
+                break
+            entry, basis = None, ''
+            key1 = (mdc_letter, alt_sev, kelas_key)
+            if key1 in fb1:
+                entry = fb1[key1]
+                basis = f"MDC {mdc_letter}, Severity {alt_sev}"
+            else:
+                key2 = (mdc_letter, alt_sev)
+                if key2 in fb2:
+                    entry = fb2[key2]
+                    basis = f"MDC {mdc_letter}, Severity {alt_sev} (estimasi)"
+            if entry and entry.get('cbg_code') and float(entry.get('base_tariff', 0)) > 0:
+                alternatives.append({
+                    "cbg_code":      entry.get('cbg_code', ''),
+                    "base_tariff":   float(entry.get('base_tariff', 0)),
+                    "severity":      alt_sev,
+                    "severity_label": self.SEVERITY_LABELS.get(alt_sev, alt_sev),
+                    "basis":         basis,
+                })
+        return alternatives
+
     # ── Tariff by kelas ───────────────────────────────────────────────────────
     def _calculate_tariff_by_kelas(self, base_tariff_kelas3: float) -> dict:
         return {
@@ -393,3 +531,54 @@ class SurrogateGrouper:
                 {"feature": feat, "impact": round(float(score), 4), "direction": "positive"}
                 for feat, score in top3.items()
             ]
+
+    # ── Multi-code analysis: secondary diagnoses ───────────────────────────
+    # Known severity escalator chapters (common comorbidities that may raise
+    # INA-CBGs severity): E=Endocrine/DM, I=Cardiovascular, N=Renal
+    ESCALATOR_CHAPTERS = {'E', 'I', 'N'}
+
+    def _analyze_secondary_diagnoses(self, primary_icd: str,
+                                      secondaries: list,
+                                      mdc_letter: str,
+                                      severity: str) -> dict:
+        """Analyze secondary diagnoses for comorbidity and severity signals."""
+        if not secondaries:
+            return {"has_secondaries": False}
+
+        primary_chapter = primary_icd[0].upper() if primary_icd else ''
+        chapters = {primary_chapter} if primary_chapter else set()
+        secondary_chapters = []
+        for code in secondaries:
+            ch = code[0].upper() if code else ''
+            if ch:
+                chapters.add(ch)
+                secondary_chapters.append(ch)
+
+        escalator_hits = set(secondary_chapters) & self.ESCALATOR_CHAPTERS
+        # Remove primary chapter from escalator hits (only secondary comorbidities)
+        escalator_hits -= {primary_chapter}
+        has_escalator = bool(escalator_hits)
+
+        return {
+            "has_secondaries":     True,
+            "count":               len(secondaries),
+            "distinct_chapters":   len(chapters),
+            "chapter_list":        sorted(chapters),
+            "has_comorbidity":     len(chapters) >= 2,
+            "has_escalator":       has_escalator,
+            "escalator_chapters":  sorted(escalator_hits),
+            "severity_warning":    has_escalator and severity in ('0', 'I'),
+        }
+
+    # ── Multi-code analysis: procedures ───────────────────────────────────
+    def _analyze_procedures(self, primary_icd: str,
+                            procedures: list) -> dict:
+        """Analyze procedure list for consistency and coverage."""
+        if not procedures:
+            return {"has_procedures": False, "count": 0}
+
+        return {
+            "has_procedures": True,
+            "count":          len(procedures),
+            "codes":          procedures,
+        }

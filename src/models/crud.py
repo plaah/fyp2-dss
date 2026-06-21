@@ -20,7 +20,9 @@ import random
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, List
 
-from src.models.db_models import db, Prediction, SystemStats
+from sqlalchemy import cast, Date as SADate
+
+from src.models.db_models import db, Prediction, SystemStats, PredictionFeedback
 
 
 def save_prediction(data: Dict[str, Any]) -> Prediction:
@@ -160,7 +162,7 @@ def get_stats_summary() -> Dict[str, Any]:
         .group_by(Prediction.risk_level)
         .all()
     )
-    risk_dist = {r: c for r, c in risk_counts}
+    risk_dist = {r or "UNKNOWN": c for r, c in risk_counts}
 
     return {
         "total_predictions":            total,
@@ -189,20 +191,29 @@ def get_prediction_history(days: int = 7) -> List[Dict[str, Any]]:
         List of dicts [{"date": "2026-04-11", "count": 12, ...}, ...]
         One entry per day, ordered ascending.
     """
+    cutoff = date.today() - timedelta(days=days - 1)
+    rows = (
+        db.session.query(
+            cast(Prediction.created_at, SADate).label("day"),
+            db.func.count().label("total"),
+            db.func.sum(
+                db.case((Prediction.ml_prediction == "grouping_valid", 1), else_=0)
+            ).label("valid"),
+        )
+        .filter(Prediction.created_at >= cutoff)
+        .group_by(cast(Prediction.created_at, SADate))
+        .order_by(cast(Prediction.created_at, SADate))
+        .all()
+    )
+    row_map = {r.day: r for r in rows}
     result = []
     for i in range(days - 1, -1, -1):
         d = date.today() - timedelta(days=i)
-        day_total = Prediction.query.filter(
-            db.func.date(Prediction.created_at) == d
-        ).count()
-        valid_c = Prediction.query.filter(
-            db.func.date(Prediction.created_at) == d,
-            Prediction.ml_prediction == "grouping_valid"
-        ).count()
+        r = row_map.get(d)
         result.append({
             "date":  d.isoformat(),
-            "count": day_total,
-            "valid": valid_c,
+            "count": r.total if r else 0,
+            "valid": r.valid if r else 0,
         })
     return result
 
@@ -294,6 +305,107 @@ def seed_from_csv(filepath: str = "data/synthetic_bpjs.csv", limit: int = 100) -
     return inserted
 
 
+def get_impact_stats(total_preds: int | None = None, valid_cnt: int | None = None) -> Dict[str, Any]:
+    """
+    Compute impact metrics for the dashboard: feedback confirmation rate,
+    trust score, recent feedback list, and pending review queue.
+
+    Returns a dict that is merged into the /api/v1/stats response.
+    All values have safe defaults — never raises on empty DB.
+    """
+    # ── Feedback aggregates ────────────────────────────────────────────────
+    total_fb = PredictionFeedback.query.count()
+    confirmed_fb = PredictionFeedback.query.filter(
+        PredictionFeedback.is_correct.is_(True)
+    ).count()
+    confirmation_rate = round(confirmed_fb / total_fb, 4) if total_fb > 0 else 0.0
+
+    # ── avg MDC confidence (confidence_valid = model confidence in grouping) ─
+    avg_conf_row = db.session.query(
+        db.func.avg(Prediction.confidence_valid)
+    ).scalar()
+    avg_mdc_confidence = round(float(avg_conf_row), 4) if avg_conf_row is not None else None
+
+    # ── Recent feedback (last 5, most recent first) ────────────────────────
+    recent_rows = (
+        db.session.query(PredictionFeedback, Prediction)
+        .outerjoin(Prediction, PredictionFeedback.prediction_id == Prediction.id)
+        .order_by(PredictionFeedback.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_feedback = [
+        {
+            "icd_codes": pred.idrg_primary_icd10 if pred else "—",
+            "cbg_prediction": fb.submitted_cbg or "—",
+            "confirmed": fb.is_correct,
+            "created_at": fb.created_at.isoformat() if fb.created_at else None,
+        }
+        for fb, pred in recent_rows
+    ]
+
+    # ── Trust score ────────────────────────────────────────────────────────
+    trust_score = None
+    trust_breakdown = None
+    if total_fb > 0 and avg_mdc_confidence is not None:
+        if total_preds is None:
+            total_preds = Prediction.query.count()
+        if valid_cnt is None:
+            valid_cnt = Prediction.query.filter(
+                Prediction.ml_prediction == "grouping_valid"
+            ).count()
+        grouping_valid_ratio = round(valid_cnt / total_preds, 4) if total_preds > 0 else 0.0
+
+        trust_breakdown = {
+            "mdc_confidence": avg_mdc_confidence,
+            "confirmation_rate": confirmation_rate,
+            "grouping_valid": grouping_valid_ratio,
+        }
+        trust_score = round(
+            (avg_mdc_confidence * 0.4 + confirmation_rate * 0.4 + grouping_valid_ratio * 0.2) * 100
+        )
+
+    # ── Pending review: predictions with no feedback entry ─────────────────
+    reviewed_pred_ids = (
+        db.session.query(PredictionFeedback.prediction_id)
+        .filter(PredictionFeedback.prediction_id.isnot(None))
+    )
+    pending_preds = (
+        Prediction.query
+        .filter(~Prediction.id.in_(reviewed_pred_ids))
+        .order_by(Prediction.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    conf_col = {
+        "grouping_valid":    lambda p: p.confidence_valid,
+        "coding_incomplete": lambda p: p.confidence_incomplete,
+        "grouping_invalid":  lambda p: p.confidence_invalid,
+    }
+    pending_review = [
+        {
+            "id": p.id,
+            "icd_codes": p.idrg_primary_icd10 or "—",
+            "cbg_prediction": p.ml_prediction or "—",
+            "mdc_confidence": conf_col.get(p.ml_prediction, lambda p: p.confidence_valid)(p),
+            "risk_level": p.risk_level or "—",
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        for p in pending_preds
+    ]
+
+    return {
+        "feedback_total":             total_fb,
+        "feedback_confirmed":         confirmed_fb,
+        "feedback_confirmation_rate": confirmation_rate,
+        "avg_mdc_confidence":         avg_mdc_confidence,
+        "recent_feedback":            recent_feedback,
+        "trust_score":                trust_score,
+        "trust_score_breakdown":      trust_breakdown,
+        "pending_review":             pending_review,
+    }
+
+
 # ── Private helpers ────────────────────────────────────────────────────────────
 
 def _to_int(val) -> int:
@@ -314,11 +426,10 @@ def _safe_int(val) -> int:
 
 def save_feedback(data: dict):
     """Persist a doctor feedback report for an inaccurate prediction."""
-    from src.models.db_models import PredictionFeedback
     fb = PredictionFeedback(
         prediction_id = data.get('prediction_id'),
         submitted_cbg = data.get('submitted_cbg', ''),
-        correct_cbg   = data['correct_cbg'],
+        correct_cbg   = data.get('correct_cbg', ''),
         is_correct    = data.get('is_correct', False),
         notes         = data.get('notes', ''),
     )

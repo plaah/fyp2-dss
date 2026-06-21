@@ -1,26 +1,54 @@
 import time
+import threading
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from src.services.surrogate_grouper import SurrogateGrouper
 from src.services.financial_estimator import FinancialEstimator
+from src.services.recommender import RecommendationEngine
 from src.services.icd_search import icd_search_service
 
 api_bp = Blueprint('api', __name__)
 
-_grouper            = SurrogateGrouper()
+_grouper             = SurrogateGrouper()
 _financial_estimator = FinancialEstimator()
+_recommender         = RecommendationEngine()
+
+
+def _trigger_retraining_async(n_trials: int = 10) -> None:
+    """Run execute_retraining in a background thread."""
+    from flask import current_app
+    app = current_app._get_current_object()
+    def _run():
+        try:
+            from src.services.retrainer import execute_retraining
+            with app.app_context():
+                execute_retraining(n_trials=n_trials)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("execute_retraining background task failed: %s", e, exc_info=True)
+            
+    threading.Thread(target=_run, daemon=True).start()
+
 
 
 def _save_prediction_async(payload: dict) -> None:
     """
-    Persist a prediction result to the database in a non-blocking manner.
-    DB failure must never block the API response.
+    Persist a prediction result in a true background thread so the API
+    response is returned immediately after ML inference completes.
     """
-    try:
-        from src.models.crud import save_prediction
-        save_prediction(payload)
-    except Exception:
-        pass
+    from flask import current_app
+    app = current_app._get_current_object()
+
+    def _run():
+        try:
+            from src.models.crud import save_prediction
+            with app.app_context():
+                save_prediction(payload)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("save_prediction failed: %s", e, exc_info=True)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 @api_bp.route('/health', methods=['GET'])
@@ -153,6 +181,14 @@ def full_assessment():
 
     t_start = time.time()
 
+    # ── Normalize multi-ICD payload (backward-compatible) ─────────────────
+    # Accept both old single-value and new array formats
+    if 'icd9_procedures' not in body and 'icd9_procedure' in body:
+        single = body.get('icd9_procedure', '')
+        body['icd9_procedures'] = [single] if single else []
+    if 'secondary_icd10' not in body:
+        body['secondary_icd10'] = []
+
     # 1 — Surrogate grouper: CBG prediction
     try:
         grouper_result = _grouper.predict(body)
@@ -170,9 +206,7 @@ def full_assessment():
 
     # 3 — Recommendations
     try:
-        from src.services.recommender import RecommendationEngine
-        engine = RecommendationEngine()
-        recommendation = engine.synthesize(
+        recommendation = _recommender.synthesize(
             grouper_result=grouper_result,
             financial_result=financial_result,
         )
@@ -207,9 +241,13 @@ def stats():
     GET /api/v1/stats — aggregated stats for analytics dashboard.
     """
     try:
-        from src.models.crud import get_stats_summary, get_prediction_history
+        from src.models.crud import get_stats_summary, get_prediction_history, get_impact_stats
         summary = get_stats_summary()
         summary["prediction_history"] = get_prediction_history(days=7)
+        summary.update(get_impact_stats(
+            total_preds=summary.get("total_predictions"),
+            valid_cnt=summary.get("grouping_valid_count"),
+        ))
         summary["status"] = "success"
         return jsonify(summary), 200
     except Exception as e:
@@ -222,13 +260,60 @@ def feedback():
         body = request.get_json(force=True, silent=True)
         if not body:
             return jsonify({'status': 'error', 'message': 'Invalid JSON body'}), 400
-        if not body.get('correct_cbg'):
+        if 'correct_cbg' not in body:
             return jsonify({'status': 'error', 'message': 'correct_cbg is required'}), 422
         from src.models.crud import save_feedback
         row = save_feedback(body)
+        
+        # UC014 Retraining Trigger on incorrect feedback count threshold
+        is_correct = body.get('is_correct', False)
+        if not is_correct:
+            from src.models.db_models import PredictionFeedback
+            incorrect_count = PredictionFeedback.query.filter_by(is_correct=False).count()
+            threshold = current_app.config.get('RETRAIN_THRESHOLD', 50)
+            if incorrect_count > 0 and incorrect_count % threshold == 0:
+                n_trials = current_app.config.get('RETRAIN_TRIALS', 10)
+                _trigger_retraining_async(n_trials=n_trials)
+                
         return jsonify({'status': 'success', 'feedback_id': row.id}), 201
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@api_bp.route('/retrain', methods=['POST'])
+def retrain():
+    """
+    POST /api/v1/retrain
+    Trigger model retraining manually.
+    Admin-only: Requires X-Admin header set to 'true' or admin=true query param.
+    """
+    if request.headers.get('X-Admin') != 'true' and request.args.get('admin') != 'true':
+        return jsonify({'status': 'error', 'message': 'Admin access required'}), 403
+        
+    sync = request.args.get('sync') == 'true'
+    n_trials_str = request.args.get('n_trials', '10')
+    try:
+        n_trials = int(n_trials_str)
+    except ValueError:
+        n_trials = 10
+        
+    if sync:
+        try:
+            from src.services.retrainer import execute_retraining
+            result = execute_retraining(n_trials=n_trials)
+            if result.get("status") == "success":
+                return jsonify(result), 200
+            else:
+                return jsonify(result), 500
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    else:
+        _trigger_retraining_async(n_trials=n_trials)
+        return jsonify({
+            'status': 'success',
+            'message': 'Retraining initiated in the background'
+        }), 202
+
 
 
 @api_bp.route('/icd-search', methods=['GET'])
@@ -246,7 +331,10 @@ def icd_search():
     """
     q           = request.args.get('q', '').strip()
     search_type = request.args.get('type', 'diagnosis')
-    limit       = min(int(request.args.get('limit', 5)), 10)
+    try:
+        limit = min(int(request.args.get('limit', 5)), 10)
+    except (ValueError, TypeError):
+        limit = 5
 
     if len(q) < 2:
         return jsonify({'results': [], 'query': q,

@@ -24,7 +24,35 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 199 89% 37%;
     --radius: 0.5rem;
+    
+    /* NEW DESIGN VARIABLES */
+    --blue: #0075de;
+    --blue-hover: #0060b8;
+    --blue-badge-bg: rgba(0, 117, 222, 0.1);
+    --blue-badge-text: #0060b8;
+    --teal: #1aae39;
+    --orange: #dd5b00;
+    --near-black: #1a1a1a;
+    --gray-500: #666666;
+    --gray-300: #999999;
+    --border-color: rgba(0, 0, 0, 0.08);
+    --white: #ffffff;
+    --warm-white: #f8f7f5;
+    --shadow-card: 0 4px 14px rgba(0, 0, 0, 0.04);
+    --shadow-deep: 0 8px 30px rgba(0, 0, 0, 0.12);
+    --radius-card: 12px;
+    --radius-lg: 16px;
+    --radius-btn: 6px;
+    --sidebar-w: 220px;
   }
+}
+
+@keyframes fadeUp {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 @layer base {

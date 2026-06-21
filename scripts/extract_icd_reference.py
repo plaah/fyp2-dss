@@ -172,7 +172,7 @@ if __name__ == '__main__':
 
     print("Extracting ICD-9-CM procedures...")
     icd9_df = extract_icd9_procedures(
-        '/Users/aflakhamjad/Documents/FYP2/ICD9CM.pdf'
+        os.environ.get('ICD9_PDF', 'data/ICD9CM.pdf')
     )
     icd9_df.to_csv('data/icd9_cm_procedures.csv', index=False)
     print(f"  ICD-9 procedures: {len(icd9_df)} codes extracted")
@@ -180,7 +180,7 @@ if __name__ == '__main__':
 
     print("\nExtracting ICD-10 Volume 3 alphabetical index...")
     icd10_df = extract_icd10_index(
-        '/Users/aflakhamjad/Documents/FYP2/icd10-V3.pdf'
+        os.environ.get('ICD10_PDF', 'data/icd10-V3.pdf')
     )
     icd10_df.to_csv('data/icd10_2010_reference.csv', index=False)
     print(f"\n  ICD-10 terms: {len(icd10_df)} entries extracted")

@@ -1,57 +1,83 @@
 import { BrowserRouter, NavLink, Routes, Route, Navigate } from "react-router-dom"
-import { Activity, LayoutDashboard, Stethoscope } from "lucide-react"
 import Predict from "@/pages/Predict"
 import Dashboard from "@/pages/Dashboard"
+import { Icon } from "@/components/ui/icons"
 import "./App.css"
 
 function Sidebar() {
-  const base = "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors text-muted-foreground hover:text-foreground hover:bg-accent"
-  const activeClass = "bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+  const nav = [
+    {id:"predict",icon:"brain",label:"Prediksi CBG"},
+    {id:"dashboard",icon:"dashboard",label:"Dashboard"},
+  ];
+  
   return (
-    <aside className="w-56 shrink-0 border-r bg-card h-screen sticky top-0 flex flex-col">
-      <div className="flex items-center gap-2 px-4 py-5 border-b">
-        <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
-          <Activity className="w-4 h-4 text-primary-foreground" />
-        </div>
-        <div>
-          <p className="text-sm font-semibold leading-tight">FYP2 DSS</p>
-          <p className="text-[10px] text-muted-foreground leading-tight">BPJS CBG Predictor</p>
+    <aside style={{width:"var(--sidebar-w)",background:"#31302e",display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:50}}>
+      {/* Brand */}
+      <div style={{padding:"24px 20px 20px",borderBottom:"1px solid rgba(255,255,255,0.07)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <Icon name="logo" size={28}/>
+          <div>
+            <div style={{fontWeight:700,fontSize:14,color:"#f6f5f4",letterSpacing:"-0.25px"}}>CBG Predict</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.3)",marginTop:1,letterSpacing:"0.02em"}}>Clinical DSS · BPJS</div>
+          </div>
         </div>
       </div>
 
-      <nav className="flex-1 px-2 py-3 space-y-0.5">
-        <NavLink to="/predict" className={({ isActive }) => `${base} ${isActive ? activeClass : ""}`}>
-          <Stethoscope className="w-4 h-4" />
-          Prediksi CBG
-        </NavLink>
-        <NavLink to="/dashboard" className={({ isActive }) => `${base} ${isActive ? activeClass : ""}`}>
-          <LayoutDashboard className="w-4 h-4" />
-          Dashboard
-        </NavLink>
+      {/* Nav */}
+      <nav style={{flex:1,padding:"16px 10px",display:"flex",flexDirection:"column",gap:2}}>
+        <p style={{fontSize:10,color:"rgba(255,255,255,0.25)",fontWeight:600,letterSpacing:"0.08em",marginBottom:8,paddingLeft:10}}>NAVIGASI</p>
+        {nav.map(n=>{
+          return (
+            <NavLink key={n.id} to={`/${n.id}`} style={({ isActive }) => ({
+              display:"flex",alignItems:"center",gap:10,padding:"9px 10px",borderRadius:6,border:"none",
+              background:isActive?"rgba(0,117,222,0.2)":"transparent",
+              color:isActive?"#62aef0":"rgba(255,255,255,0.45)",
+              fontWeight:isActive?600:400,fontSize:14,textAlign:"left",width:"100%",
+              transition:"all .12s",letterSpacing:"0.01em", textDecoration:"none"
+            })}
+            >
+              {({ isActive }) => (
+                <>
+                  <Icon name={n.icon} size={16} color={isActive?"#62aef0":"rgba(255,255,255,0.4)"} strokeWidth={isActive?2:1.5}/>
+                  {n.label}
+                  {isActive&&<div style={{marginLeft:"auto",width:5,height:5,borderRadius:"50%",background:"#62aef0"}}/>}
+                </>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
-      <div className="px-4 py-3 border-t">
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-[11px] text-muted-foreground">Flask :5001</span>
+      {/* System info */}
+      <div style={{padding:"14px 18px 20px",borderTop:"1px solid rgba(255,255,255,0.07)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{width:28,height:28,borderRadius:"50%",background:"rgba(0,117,222,0.3)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <Icon name="shield" size={14} color="#62aef0" strokeWidth={1.5}/>
+          </div>
+          <div>
+            <p style={{fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.55)", margin:0}}>dr. Administrator</p>
+            <p style={{fontSize:10,color:"rgba(255,255,255,0.25)", margin:0}}>RSUD Umum · Dokter</p>
+          </div>
         </div>
-        <p className="text-[10px] text-muted-foreground mt-0.5">Neurovi: disconnected</p>
+        <p style={{fontSize:10,color:"rgba(255,255,255,0.2)",marginTop:4, margin:0}}>v2.4.1 · 29 April 2026</p>
       </div>
     </aside>
-  )
+  );
 }
 
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="flex min-h-screen bg-background">
+      <div style={{ display: "flex", minHeight: "100vh", background: "var(--warm-white)", fontFamily: "Inter, sans-serif" }}>
         <Sidebar />
-        <main className="flex-1 p-6 max-w-3xl">
-          <Routes>
-            <Route path="/" element={<Navigate to="/predict" replace />} />
-            <Route path="/predict" element={<Predict />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-          </Routes>
+        <main style={{ flex: 1, padding: "40px 60px", marginLeft: "var(--sidebar-w)" }}>
+          <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+            <Routes>
+              <Route path="/" element={<Navigate to="/predict" replace />} />
+              <Route path="/predict" element={<Predict />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+            </Routes>
+          </div>
         </main>
       </div>
     </BrowserRouter>

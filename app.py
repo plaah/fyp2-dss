@@ -41,7 +41,9 @@ def create_app() -> Flask:
 
 if __name__ == '__main__':
     app = create_app()
-    # Create tables on first run (idempotent)
     with app.app_context():
         db.create_all()
+        # Eager-load ML models at startup so first prediction is instant
+        from src.api.routes import _grouper
+        _grouper._load()
     app.run(debug=True, port=5001)
